@@ -378,7 +378,7 @@ class CropOverlayWindow(
     private var currentColor = Color(255, 0, 0) // Default red
     private var brushStrokeWidth = 3f
     private var textFontSize = 18
-    private var currentFontFamily = "SansSerif"
+    private var currentFontFamily = "Lexica Ultralegible"
 
     // Drawing operations list
     private val drawingOperations = mutableListOf<DrawingOperation>()
