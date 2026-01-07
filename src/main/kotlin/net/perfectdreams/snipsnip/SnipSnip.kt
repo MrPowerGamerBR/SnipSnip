@@ -1,6 +1,7 @@
 package net.perfectdreams.snipsnip
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.awt.*
 import java.awt.event.*
@@ -8,6 +9,7 @@ import java.awt.image.BufferedImage
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 import javax.imageio.ImageIO
 import javax.swing.*
 import kotlin.math.roundToInt
@@ -154,156 +156,96 @@ class SnipSnip {
             "xdg-desktop-portal-kde"
         )
 
-        // Create a KWin script to get windows in stacking order
-        val scriptContent = """
-            var windows = workspace.stackingOrder;
-            var result = "SNIPSNIP_START";
-            for (var i = windows.length - 1; i >= 0; i--) {
-                var w = windows[i];
-                if (!w.minimized && !w.skipTaskbar && (w.normalWindow || w.dialog)) {
-                    var geo = w.frameGeometry;
-                    result += "|" + w.internalId + ";" + geo.x + ";" + geo.y + ";" + geo.width + ";" + geo.height + ";" + (w.resourceClass || "");
-                }
+        val uuid = UUID.randomUUID()
+
+        println("Script UUID is $uuid")
+
+        // TODO: Use createTempFile later, we are using this because it is easier for debugging purposes
+        // We use a randomUUID to avoid hard-to-know debugging sessions of "why tf it isn't working???" because it was loading a previously working result
+        val scriptFile = File("scripts", "script_$uuid.js")
+        scriptFile.writeText(
+            SnipSnip::class.java.getResourceAsStream("/script.js")
+                .readAllBytes()
+                .toString(Charsets.UTF_8)
+                .replace("{randomUUID}", uuid.toString())
+        )
+
+        println("Temporary file is at ${scriptFile.absolutePath}")
+
+        // The output will be the script ID (example: 67)
+        val scriptId = ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", scriptFile.absolutePath)
+            .start()
+            .apply {
+                this.waitFor()
             }
-            result += "|SNIPSNIP_END";
-            console.log(result);
-        """.trimIndent()
+            .inputStream
+            .readAllBytes()
+            .toString(Charsets.UTF_8)
+            .trim() // Yeah... you need this
 
-        val scriptFile = File.createTempFile("snipsnip_stacking_", ".js")
-        scriptFile.deleteOnExit()
-        scriptFile.writeText(scriptContent)
+        println("Script ID: $scriptId")
 
-        try {
-            // Unload any previous script with the same name
-            ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting.unloadScript", "snipsnip_stacking")
-                .start().waitFor()
+        // And now we run it!
+        // This will output to the journalctl (sadly)
+        val runProcess = ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting/Script$scriptId", "org.kde.kwin.Script.run")
+            .start()
+        val exitValue = runProcess.waitFor()
 
-            // Load and run the script
-            ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting.loadScript", scriptFile.absolutePath, "snipsnip_stacking")
-                .start().waitFor()
+        println("Status Code: $exitValue")
+        println("Run Script Result: ${runProcess.inputStream.bufferedReader().readText()}")
 
-            ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting.start")
-                .start().waitFor()
+        // Wait a moment for script to execute
+        Thread.sleep(100)
 
-            // Wait a moment for script to execute
-            Thread.sleep(100)
+        // Read output from journalctl
+        val journalProcess = ProcessBuilder("journalctl", "--user", "-t", "kwin_wayland", "-n", "50", "--no-pager", "-o", "cat").start()
 
-            // Read output from journalctl
-            val journalProcess = ProcessBuilder("journalctl", "--user", "-t", "kwin_wayland",
-                "-n", "50", "--no-pager", "-o", "cat")
-                .start()
-            val journalOutput = journalProcess.inputStream.bufferedReader().readText()
+        val journalLines = journalProcess.inputStream
+            .bufferedReader()
+            .readLines()
 
-            // Parse the stacking order from journal
-            val stackingMatch = Regex("""SNIPSNIP_START\|(.*?)\|SNIPSNIP_END""").find(journalOutput)
-
-            if (stackingMatch != null) {
-                val windowData = stackingMatch.groupValues[1]
-                val windowInfos = mutableListOf<WindowInfo>()
-
-                for (entry in windowData.split("|")) {
-                    if (entry.isBlank()) continue
-                    val parts = entry.split(";")
-                    if (parts.size >= 6) {
-                        val id = parts[0]
-                        val x = parts[1].toDoubleOrNull() ?: continue
-                        val y = parts[2].toDoubleOrNull() ?: continue
-                        val width = parts[3].toDoubleOrNull() ?: continue
-                        val height = parts[4].toDoubleOrNull() ?: continue
-                        val resourceClass = parts[5]
-
-                        // Skip windows with zero or negative dimensions
-                        if (width <= 0 || height <= 0) continue
-
-                        // Skip desktop components
-                        if (desktopComponents.contains(resourceClass.lowercase())) continue
-
-                        windowInfos.add(WindowInfo(
-                            id = "{$id}",
-                            geometry = DoubleRectangle(x, y, width, height),
-                            processName = resourceClass.ifEmpty { null },
-                            pid = null
-                        ))
-                    }
-                }
-
-                // Clean up
-                ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting",
-                    "org.kde.kwin.Scripting.unloadScript", "snipsnip_stacking")
-                    .start().waitFor()
-
-                println("Found ${windowInfos.size} windows in stacking order (topmost first)")
-                return windowInfos
-            }
-        } catch (e: Exception) {
-            println("Error getting stacking order: ${e.message}")
-            e.printStackTrace()
+        println("Journal Lines:")
+        for (line in journalLines) {
+            println("- $line")
         }
 
-        // Fallback to kdotool if KWin scripting fails
-        println("Falling back to kdotool...")
-        return getVisibleWindowInfosFromKdotool(desktopComponents)
-    }
-
-    /**
-     * Fallback method using kdotool (doesn't guarantee stacking order)
-     */
-    private fun getVisibleWindowInfosFromKdotool(desktopComponents: Set<String>): List<WindowInfo> {
-        val windowInfos = mutableListOf<WindowInfo>()
-
-        val searchProcess = ProcessBuilder("kdotool", "search", "").start()
-        val windowIds = searchProcess.inputStream.bufferedReader().readLines()
-            .filter { it.startsWith("{") && it.endsWith("}") }
-
-        for (windowId in windowIds) {
-            try {
-                val geomProcess = ProcessBuilder("kdotool", "getwindowgeometry", windowId).start()
-                val geomOutput = geomProcess.inputStream.bufferedReader().readText()
-
-                val posMatch = Regex("""Position:\s*(-?[\d.]+),(-?[\d.]+)""").find(geomOutput)
-                val sizeMatch = Regex("""Geometry:\s*([\d.]+)x([\d.]+)""").find(geomOutput)
-
-                if (posMatch != null && sizeMatch != null) {
-                    val x = posMatch.groupValues[1].toDouble()
-                    val y = posMatch.groupValues[2].toDouble()
-                    val width = sizeMatch.groupValues[1].toDouble()
-                    val height = sizeMatch.groupValues[2].toDouble()
-
-                    if (width <= 0 || height <= 0) continue
-
-                    val pidProcess = ProcessBuilder("kdotool", "getwindowpid", windowId).start()
-                    val pid = pidProcess.inputStream.bufferedReader().readText().trim().toIntOrNull()
-
-                    var processName: String? = null
-                    if (pid != null) {
-                        val psProcess = ProcessBuilder("ps", "-p", pid.toString(), "-o", "comm=").start()
-                        processName = psProcess.inputStream.bufferedReader().readText().trim().ifEmpty { null }
-                    }
-
-                    val classProcess = ProcessBuilder("kdotool", "getwindowclassname", windowId).start()
-                    val className = classProcess.inputStream.bufferedReader().readText().trim().ifEmpty { null }
-
-                    val effectiveName = processName ?: className
-                    if (effectiveName != null && desktopComponents.contains(effectiveName.lowercase())) {
-                        continue
-                    }
-
-                    windowInfos.add(WindowInfo(
-                        id = windowId,
-                        geometry = DoubleRectangle(x, y, width, height),
-                        processName = effectiveName,
-                        pid = pid
-                    ))
-                }
-            } catch (e: Exception) {
-                // Skip windows that fail to get info
+        val scriptOutput = journalLines
+            .reversed() // We revert it because we want to get the latest one that matches our magic value
+            .first {
+                it.startsWith("SNIPSNIP_OUTPUT_$uuid:")
             }
+            .removePrefix("SNIPSNIP_OUTPUT_$uuid:")
+
+        println("Stacking output: $scriptOutput")
+
+        // Contrary to popular belief
+        // (also known as StackOverflow)
+        // the right way to stop the script is with the *gasp* stop argument, which also unloads the script it seems
+        // (You can see all parameters with "qdbus6 org.kde.KWin")
+        ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting/Script$scriptId", "org.kde.kwin.Scripting.stop").start().waitFor()
+
+        // Script output is bottom -> top
+        val stackingInfo = Json.decodeFromString<List<SnipStackingInfo>>(scriptOutput)
+
+        val visibleWindows = stackingInfo
+            .reversed()
+            .filterNot { it.minimized }
+            .filter { it.resourceName !in desktopComponents }
+            .map {
+                WindowInfo(
+                    id = it.internalId,
+                    geometry = DoubleRectangle(it.geometry.x, it.geometry.y, it.geometry.width, it.geometry.height),
+                    it.resourceName,
+                    it.pid
+                )
+            }
+
+        println("Visible Windows (top -> bottom):")
+        for (window in visibleWindows) {
+            println("- $window")
         }
 
-        return windowInfos
+        return visibleWindows
     }
 
     private fun saveCroppedImage(image: BufferedImage, selectedWindow: WindowInfo?) {
@@ -319,6 +261,18 @@ class SnipSnip {
         ImageIO.write(image, "PNG", outputFile)
 
         println("Screenshot saved to: ${outputFile.absolutePath}")
+
+        // Now we need to copy it to the clipboard using "wl-copy"
+        val process = ProcessBuilder("wl-copy")
+            .start()
+
+        // We write the saved file bytes to the InputStream of wl-copy, which works fine (yayy!)
+        // Maybe we could write everything to a ByteArray first and then write to the file and to here, but for now, it works :)
+        process.outputStream.use {
+            it.write(outputFile.readBytes())
+        }
+
+        process.waitFor()
     }
 }
 
@@ -385,7 +339,7 @@ class CropOverlayWindow(
 
         println("Windows Informations:")
         for (windowInfo in adjustedWindowInfos) {
-            println("Window Info: $windowInfo")
+            println("- $windowInfo")
         }
 
         val panel = object : JPanel() {
