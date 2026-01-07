@@ -73,7 +73,7 @@ class SnipSnip {
         val screenshotFile = File.createTempFile("snipsnip_", ".png")
         screenshotFile.deleteOnExit()
 
-        val captureSuccess = captureCurrentMonitor(screenshotFile)
+        val captureSuccess = captureCurrentMonitor(screenshotFile, activeOutput)
         if (!captureSuccess) {
             JOptionPane.showMessageDialog(null, "Failed to capture screenshot", "Error", JOptionPane.ERROR_MESSAGE)
             exitProcess(1)
@@ -128,15 +128,130 @@ class SnipSnip {
         )
     }
 
-    private fun captureCurrentMonitor(outputFile: File): Boolean {
-        val process = ProcessBuilder(
-            "spectacle", "-b", "-m", "-n", "-o", outputFile.absolutePath
-        ).inheritIO().start()
-        val exitCode = process.waitFor()
+    /**
+     * Get monitor bounds in physical pixel coordinates for cropping the portal screenshot.
+     * The portal screenshot is in physical pixels, so we need physical coordinates.
+     */
+    private fun getMonitorPhysicalBounds(outputName: String): Rectangle? {
+        val process = ProcessBuilder("kscreen-doctor", "--json").start()
+        val jsonOutput = process.inputStream.bufferedReader().readText()
 
-        // Wait a bit for the file to be written
-        Thread.sleep(500)
-        return exitCode == 0 && outputFile.exists()
+        val json = Json { ignoreUnknownKeys = true }
+        val config = json.decodeFromString<KScreenConfig>(jsonOutput)
+
+        val output = config.outputs.find { it.name == outputName && it.enabled }
+            ?: return null
+
+        // Position is in logical coordinates, convert to physical by multiplying by scale
+        // Size is already in physical pixels
+        return Rectangle(
+            (output.pos.x * output.scale).roundToInt(),
+            (output.pos.y * output.scale).roundToInt(),
+            output.size.width,
+            output.size.height
+        )
+    }
+
+    /**
+     * Capture a full-screen screenshot using the XDG Desktop Portal Screenshot API.
+     * This captures the entire virtual desktop (all monitors).
+     */
+    private fun captureFullScreenViaPortal(): File? {
+        val handleToken = "snipsnip${System.currentTimeMillis()}"
+
+        // Start monitoring for the response signal in the background
+        val monitorProcess = ProcessBuilder(
+            "gdbus", "monitor", "--session",
+            "--dest", "org.freedesktop.portal.Desktop"
+        ).start()
+
+        // Make the screenshot request
+        val callProcess = ProcessBuilder(
+            "gdbus", "call", "--session",
+            "--dest", "org.freedesktop.portal.Desktop",
+            "--object-path", "/org/freedesktop/portal/desktop",
+            "--method", "org.freedesktop.portal.Screenshot.Screenshot",
+            "", "{'handle_token': <'$handleToken'>, 'interactive': <false>}"
+        ).start()
+        callProcess.waitFor()
+
+        // Read monitor output line by line until we find our response
+        val reader = monitorProcess.inputStream.bufferedReader()
+        var uri: String? = null
+        val timeout = System.currentTimeMillis() + 10000 // 10 second timeout
+
+        while (System.currentTimeMillis() < timeout) {
+            if (reader.ready()) {
+                val line = reader.readLine() ?: break
+                // Look for the Response signal with our handle token
+                if (line.contains(handleToken) && line.contains("Response")) {
+                    // Parse the URI from the response
+                    // Format: ...Response (uint32 0, {'uri': <'file:///path/to/file'>})
+                    val uriMatch = Regex("""'uri':\s*<'([^']+)'>""").find(line)
+                    if (uriMatch != null) {
+                        uri = uriMatch.groupValues[1]
+                        break
+                    }
+                }
+            } else {
+                Thread.sleep(50)
+            }
+        }
+
+        // Clean up the monitor process
+        monitorProcess.destroy()
+
+        if (uri == null) {
+            println("Failed to capture screenshot via portal: no URI received")
+            return null
+        }
+
+        // Convert file:// URI to File path
+        val filePath = uri.removePrefix("file://")
+        val screenshotFile = File(filePath)
+
+        if (!screenshotFile.exists()) {
+            println("Screenshot file does not exist: $filePath")
+            return null
+        }
+
+        return screenshotFile
+    }
+
+    private fun captureCurrentMonitor(outputFile: File, activeOutputName: String): Boolean {
+        // Get physical pixel bounds for cropping
+        val physicalBounds = getMonitorPhysicalBounds(activeOutputName)
+        if (physicalBounds == null) {
+            println("Failed to get physical bounds for monitor: $activeOutputName")
+            return false
+        }
+
+        // Capture full screen via portal
+        val fullScreenshotFile = captureFullScreenViaPortal()
+        if (fullScreenshotFile == null) {
+            println("Failed to capture screenshot via portal")
+            return false
+        }
+
+        val fullImage = ImageIO.read(fullScreenshotFile)
+        if (fullImage == null) {
+            println("Failed to read screenshot image")
+            return false
+        }
+
+        println("Full screenshot size: ${fullImage.width}x${fullImage.height}")
+        println("Cropping to physical bounds: $physicalBounds")
+
+        // Crop to current monitor (physical pixel coordinates)
+        val croppedImage = fullImage.getSubimage(
+            physicalBounds.x,
+            physicalBounds.y,
+            physicalBounds.width,
+            physicalBounds.height
+        )
+
+        ImageIO.write(croppedImage, "PNG", outputFile)
+        return outputFile.exists()
     }
 
     /**
