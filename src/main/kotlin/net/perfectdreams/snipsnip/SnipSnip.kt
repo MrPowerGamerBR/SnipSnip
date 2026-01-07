@@ -358,6 +358,11 @@ class CropOverlayWindow(
 ) : JFrame() {
     companion object {
         private const val USE_KDIALOG_COLOR_PICKER = true
+
+        // Magnifier settings for precision selection
+        private const val MAGNIFIER_SIZE = 120        // Diameter of the magnifying glass circle
+        private const val MAGNIFIER_ZOOM = 4          // 4x zoom
+        private const val MAGNIFIER_OFFSET = 30       // Offset from cursor position
     }
 
     private var selectionStart: Point? = null
@@ -546,6 +551,11 @@ class CropOverlayWindow(
                     g2d.stroke = BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, floatArrayOf(5f), 0f)
                     g2d.drawLine(currentCursorPosition!!.x, 0, currentCursorPosition!!.x, height)
                     g2d.drawLine(0, currentCursorPosition!!.y, width, currentCursorPosition!!.y)
+
+                    // Draw magnifier for precision pixel selection
+                    if (currentTool == ToolMode.CROP) {
+                        drawMagnifier(g2d, currentCursorPosition!!, width, height)
+                    }
                 }
 
                 // Draw instructions at top
@@ -576,6 +586,101 @@ class CropOverlayWindow(
 
                 // Draw toolbar
                 drawToolbar(g2d, width)
+            }
+
+            private fun drawMagnifier(g2d: Graphics2D, cursorPos: Point, panelWidth: Int, panelHeight: Int) {
+                val radius = MAGNIFIER_SIZE / 2
+
+                // Calculate magnifier position (offset from cursor, flip if near edges)
+                var magX = cursorPos.x + MAGNIFIER_OFFSET
+                var magY = cursorPos.y + MAGNIFIER_OFFSET
+
+                // Flip to left side if too close to right edge
+                if (magX + MAGNIFIER_SIZE > panelWidth) {
+                    magX = cursorPos.x - MAGNIFIER_OFFSET - MAGNIFIER_SIZE
+                }
+                // Flip to top if too close to bottom edge
+                if (magY + MAGNIFIER_SIZE > panelHeight) {
+                    magY = cursorPos.y - MAGNIFIER_OFFSET - MAGNIFIER_SIZE
+                }
+                // Clamp to screen bounds
+                magX = magX.coerceIn(0, panelWidth - MAGNIFIER_SIZE)
+                magY = magY.coerceIn(0, panelHeight - MAGNIFIER_SIZE)
+
+                val centerX = magX + radius
+                val centerY = magY + radius
+
+                // Calculate source region from screenshot (in screenshot coordinates)
+                val sourcePixels = MAGNIFIER_SIZE / MAGNIFIER_ZOOM  // How many source pixels we show
+                val srcCenterX = (cursorPos.x * scaleX).toInt()
+                val srcCenterY = (cursorPos.y * scaleY).toInt()
+
+                // Source region bounds (clamped to screenshot bounds)
+                val srcLeft = (srcCenterX - sourcePixels / 2).coerceIn(0, screenshot.width - 1)
+                val srcTop = (srcCenterY - sourcePixels / 2).coerceIn(0, screenshot.height - 1)
+                val srcRight = (srcLeft + sourcePixels).coerceIn(0, screenshot.width)
+                val srcBottom = (srcTop + sourcePixels).coerceIn(0, screenshot.height)
+
+                // Save the current clip and set circular clip for magnifier
+                val oldClip = g2d.clip
+                g2d.clip = java.awt.geom.Ellipse2D.Float(magX.toFloat(), magY.toFloat(), MAGNIFIER_SIZE.toFloat(), MAGNIFIER_SIZE.toFloat())
+
+                // Draw the zoomed portion of the screenshot
+                // Use nearest-neighbor interpolation for crisp pixels
+                val oldHints = g2d.getRenderingHint(RenderingHints.KEY_INTERPOLATION)
+                g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
+
+                g2d.drawImage(
+                    screenshot,
+                    magX, magY, magX + MAGNIFIER_SIZE, magY + MAGNIFIER_SIZE,
+                    srcLeft, srcTop, srcRight, srcBottom,
+                    null
+                )
+
+                g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, oldHints ?: RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+
+                // Draw pixel grid
+                g2d.color = Color(128, 128, 128, 100)
+                g2d.stroke = BasicStroke(1f)
+                val pixelSize = MAGNIFIER_ZOOM  // Each source pixel becomes this many display pixels
+
+                // Calculate grid offset based on where the source pixels start
+                val gridOffsetX = ((srcCenterX - sourcePixels / 2.0) - srcLeft) * pixelSize
+                val gridOffsetY = ((srcCenterY - sourcePixels / 2.0) - srcTop) * pixelSize
+
+                // Draw vertical grid lines
+                var x = magX + (pixelSize - gridOffsetX % pixelSize).toInt()
+                while (x < magX + MAGNIFIER_SIZE) {
+                    g2d.drawLine(x, magY, x, magY + MAGNIFIER_SIZE)
+                    x += pixelSize
+                }
+
+                // Draw horizontal grid lines
+                var y = magY + (pixelSize - gridOffsetY % pixelSize).toInt()
+                while (y < magY + MAGNIFIER_SIZE) {
+                    g2d.drawLine(magX, y, magX + MAGNIFIER_SIZE, y)
+                    y += pixelSize
+                }
+
+                // Restore clip
+                g2d.clip = oldClip
+
+                // Draw center crosshair (target pixel indicator)
+                g2d.color = Color.RED
+                g2d.stroke = BasicStroke(1f)
+                val crossSize = pixelSize / 2
+                g2d.drawLine(centerX - crossSize, centerY, centerX + crossSize, centerY)
+                g2d.drawLine(centerX, centerY - crossSize, centerX, centerY + crossSize)
+
+                // Draw magnifier border (circle)
+                g2d.color = Color.WHITE
+                g2d.stroke = BasicStroke(2f)
+                g2d.drawOval(magX, magY, MAGNIFIER_SIZE, MAGNIFIER_SIZE)
+
+                // Draw darker outer border for contrast
+                g2d.color = Color(0, 0, 0, 150)
+                g2d.stroke = BasicStroke(1f)
+                g2d.drawOval(magX - 1, magY - 1, MAGNIFIER_SIZE + 2, MAGNIFIER_SIZE + 2)
             }
 
             private fun drawToolbar(g2d: Graphics2D, panelWidth: Int) {
