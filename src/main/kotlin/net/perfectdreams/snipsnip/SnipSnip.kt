@@ -356,6 +356,9 @@ class CropOverlayWindow(
     private val onCropComplete: (BufferedImage, WindowInfo?) -> Unit,
     private val onCancel: () -> Unit
 ) : JFrame() {
+    companion object {
+        private const val USE_KDIALOG_COLOR_PICKER = true
+    }
 
     private var selectionStart: Point? = null
     private var selectionEnd: Point? = null
@@ -967,8 +970,7 @@ class CropOverlayWindow(
         isVisible = true
         panel.requestFocusInWindow()
 
-        // Use toolkit to try to make this window always on top
-        isAlwaysOnTop = true
+        isAlwaysOnTop = false // We don't want it always on top because that makes kdialog be always "behind" the screen
     }
 
     private fun handleArrowKey(keyCode: Int, fastMove: Boolean) {
@@ -1028,9 +1030,18 @@ class CropOverlayWindow(
                 }
             }
             "Color" -> {
-                val newColor = JColorChooser.showDialog(this, "Choose Color", currentColor)
-                if (newColor != null) {
-                    currentColor = newColor
+                if (USE_KDIALOG_COLOR_PICKER) {
+                    val process = ProcessBuilder("kdialog", "--getcolor", "--default", ColorUtils.convertFromColorToHex(currentColor.rgb)).start()
+                    val exitValue = process.waitFor()
+                    if (exitValue == 0) {
+                        // If the exit value is != 0, then the user closed the dialog
+                        currentColor = Color.decode(process.inputStream.bufferedReader().readLine())
+                    }
+                } else {
+                    val newColor = JColorChooser.showDialog(this, "Choose Color", currentColor)
+                    if (newColor != null) {
+                        currentColor = newColor
+                    }
                 }
             }
             "Font" -> {
