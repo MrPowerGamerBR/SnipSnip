@@ -393,6 +393,11 @@ class CropOverlayWindow(
     private var rectangleStart: Point? = null
     private var rectangleEnd: Point? = null
 
+    // Text interaction state (for dragging/editing existing text)
+    private var selectedTextIndex: Int? = null
+    private var textDragStartPoint: Point? = null
+    private var textOriginalPosition: Point? = null
+
     // Toolbar button bounds (calculated during paint)
     private var toolbarButtonBounds = mutableMapOf<String, Rectangle>()
 
@@ -763,15 +768,28 @@ class CropOverlayWindow(
                             isDragging = true
                         }
                         ToolMode.TEXT -> {
-                            // Show text input dialog
-                            val text = JOptionPane.showInputDialog(
-                                this@CropOverlayWindow,
-                                "Enter text:",
-                                "Add Text",
-                                JOptionPane.PLAIN_MESSAGE
-                            )
-                            if (!text.isNullOrBlank()) {
-                                drawingOperations.add(TextAnnotation(text, e.point, currentColor, textFontSize, currentFontFamily))
+                            // Check if clicking on existing text
+                            val g2d = panel.graphics as? Graphics2D
+                            val clickedTextIndex = g2d?.let { findTextAnnotationAt(e.point, it) }
+
+                            if (clickedTextIndex != null) {
+                                // Start potential drag/edit operation on existing text
+                                selectedTextIndex = clickedTextIndex
+                                textDragStartPoint = e.point
+                                val textOp = drawingOperations[clickedTextIndex] as TextAnnotation
+                                textOriginalPosition = textOp.position
+                                isDragging = true
+                            } else {
+                                // New text placement (existing behavior)
+                                val text = JOptionPane.showInputDialog(
+                                    this@CropOverlayWindow,
+                                    "Enter text:",
+                                    "Add Text",
+                                    JOptionPane.PLAIN_MESSAGE
+                                )
+                                if (!text.isNullOrBlank()) {
+                                    drawingOperations.add(TextAnnotation(text, e.point, currentColor, textFontSize, currentFontFamily))
+                                }
                             }
                         }
                         ToolMode.RECTANGLE -> {
@@ -818,7 +836,44 @@ class CropOverlayWindow(
                             panel.repaint()
                         }
                         ToolMode.TEXT -> {
-                            // Text is handled in mousePressed
+                            if (selectedTextIndex != null && textDragStartPoint != null) {
+                                val dx = kotlin.math.abs(e.point.x - textDragStartPoint!!.x)
+                                val dy = kotlin.math.abs(e.point.y - textDragStartPoint!!.y)
+                                val dragThreshold = 5
+
+                                if (dx < dragThreshold && dy < dragThreshold) {
+                                    // This was a click, not a drag - edit the text
+                                    val textOp = drawingOperations[selectedTextIndex!!] as TextAnnotation
+                                    // Restore original position (in case of minor movement)
+                                    drawingOperations[selectedTextIndex!!] = textOp.copy(position = textOriginalPosition!!)
+
+                                    val newText = JOptionPane.showInputDialog(
+                                        this@CropOverlayWindow,
+                                        "Edit text:",
+                                        "Edit Text",
+                                        JOptionPane.PLAIN_MESSAGE,
+                                        null,
+                                        null,
+                                        textOp.text
+                                    ) as? String
+
+                                    if (newText != null) {
+                                        if (newText.isBlank()) {
+                                            // Delete the text if empty
+                                            drawingOperations.removeAt(selectedTextIndex!!)
+                                        } else {
+                                            drawingOperations[selectedTextIndex!!] = textOp.copy(text = newText, position = textOriginalPosition!!)
+                                        }
+                                    }
+                                }
+                                // If it was a drag (dx >= threshold or dy >= threshold), position is already updated
+
+                                // Reset state
+                                selectedTextIndex = null
+                                textDragStartPoint = null
+                                textOriginalPosition = null
+                                panel.repaint()
+                            }
                         }
                         ToolMode.RECTANGLE -> {
                             rectangleEnd = e.point
@@ -851,7 +906,14 @@ class CropOverlayWindow(
                             currentBrushPoints.add(e.point)
                         }
                         ToolMode.TEXT -> {
-                            // No drag for text
+                            // Update text position while dragging
+                            if (selectedTextIndex != null && textDragStartPoint != null && textOriginalPosition != null) {
+                                val dx = e.point.x - textDragStartPoint!!.x
+                                val dy = e.point.y - textDragStartPoint!!.y
+                                val oldText = drawingOperations[selectedTextIndex!!] as TextAnnotation
+                                val newPosition = Point(textOriginalPosition!!.x + dx, textOriginalPosition!!.y + dy)
+                                drawingOperations[selectedTextIndex!!] = oldText.copy(position = newPosition)
+                            }
                         }
                         ToolMode.RECTANGLE -> {
                             rectangleEnd = e.point
@@ -1102,6 +1164,30 @@ class CropOverlayWindow(
         return windows.firstOrNull {
             it.geometry.contains(windowPoint.x.toDouble(), windowPoint.y.toDouble())
         }
+    }
+
+    private fun findTextAnnotationAt(point: Point, g2d: Graphics2D): Int? {
+        // Iterate in reverse (topmost/most recent first)
+        for (i in drawingOperations.indices.reversed()) {
+            val op = drawingOperations[i]
+            if (op is TextAnnotation) {
+                val font = Font(op.fontFamily, Font.BOLD, op.fontSize)
+                val metrics = g2d.getFontMetrics(font)
+                val textWidth = metrics.stringWidth(op.text)
+                val textHeight = metrics.height
+                // Text baseline is at position.y, so bounds extend upward
+                val bounds = Rectangle(
+                    op.position.x,
+                    op.position.y - metrics.ascent,
+                    textWidth,
+                    textHeight
+                )
+                if (bounds.contains(point)) {
+                    return i
+                }
+            }
+        }
+        return null
     }
 
     private fun getSelectionRectangle(): DoubleRectangle {
