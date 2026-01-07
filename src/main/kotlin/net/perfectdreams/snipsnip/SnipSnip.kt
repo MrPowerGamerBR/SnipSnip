@@ -156,69 +156,23 @@ class SnipSnip {
     }
 
     /**
-     * Capture a full-screen screenshot using the XDG Desktop Portal Screenshot API.
+     * Capture a full-screen screenshot using Spectacle.
+     *
      * This captures the entire virtual desktop (all monitors).
      */
-    private fun captureFullScreenViaPortal(): File? {
-        // Start monitoring for the response in the background using busctl with JSON output
-        val monitorProcess = ProcessBuilder(
-            "busctl", "--user", "monitor", "org.freedesktop.portal.Desktop", "--json=short"
-        ).start()
+    private fun captureFullScreenViaSpectacle(): BufferedImage {
+        // Using the desktop portal would be cool, but there's a smol bug:
+        // When taking the screenshot via the portal in a non-interactive manner, a dummy app with the "KDE" logo shows up for ~5 seconds
+        // So we will use spectacle OKAY SPECTACLE WON BECAUSE OF WOKE......... (just kidding)
+        val spectacleProcess = ProcessBuilder("spectacle", "--fullscreen", "--background", "--nonotify", "--output", "/proc/self/fd/1")
+            .start()
+        val screenshotImageAsBytes = spectacleProcess.inputStream.readAllBytes()
+        val exitValue = spectacleProcess.waitFor()
 
-        // Make the screenshot request using busctl
-        val callProcess = ProcessBuilder(
-            "busctl", "--user", "call",
-            "org.freedesktop.portal.Desktop",
-            "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.Screenshot",
-            "Screenshot",
-            "sa{sv}", "", "1", "interactive", "b", "false"
-        ).start()
-        callProcess.waitFor()
+        if (exitValue != 0)
+            error("Spectacle failed with exit code $exitValue")
 
-        // Read monitor output line by line until we find a response with URI
-        val reader = monitorProcess.inputStream.bufferedReader()
-        var uri: String? = null
-        val timeout = System.currentTimeMillis() + 10000 // 10 second timeout
-
-        while (System.currentTimeMillis() < timeout) {
-            if (reader.ready()) {
-                val line = reader.readLine() ?: break
-                // Look for a JSON line containing a uri with file:// path
-                // Format: {...,"payload":{...,"data":[0,{"uri":{"type":"s","data":"file:///path"}}]}}
-                if (line.contains("\"uri\"") && line.contains("file://")) {
-                    // Parse the URI from the JSON
-                    val uriMatch = Regex(""""uri":\{"type":"s","data":"(file://[^"]+)"\}""").find(line)
-                    if (uriMatch != null) {
-                        uri = uriMatch.groupValues[1]
-                        break
-                    }
-                }
-            } else {
-                Thread.sleep(50)
-            }
-        }
-
-        // Clean up the monitor process
-        monitorProcess.destroy()
-
-        if (uri == null) {
-            println("Failed to capture screenshot via portal: no URI received")
-            return null
-        }
-
-        println("Screenshot URI from portal: $uri")
-
-        // Convert file:// URI to File path
-        val filePath = uri.removePrefix("file://")
-        val screenshotFile = File(filePath)
-
-        if (!screenshotFile.exists()) {
-            println("Screenshot file does not exist: $filePath")
-            return null
-        }
-
-        return screenshotFile
+        return ImageIO.read(screenshotImageAsBytes.inputStream())
     }
 
     private fun captureCurrentMonitor(outputFile: File, activeOutputName: String): Boolean {
@@ -230,21 +184,7 @@ class SnipSnip {
         }
 
         // Capture full screen via portal
-        val fullScreenshotFile = captureFullScreenViaPortal()
-        if (fullScreenshotFile == null) {
-            println("Failed to capture screenshot via portal")
-            return false
-        }
-
-        val fullImage = ImageIO.read(fullScreenshotFile)
-
-        // Delete the created screenshot because it has already been loaded in memory
-        fullScreenshotFile.delete()
-
-        if (fullImage == null) {
-            println("Failed to read screenshot image")
-            return false
-        }
+        val fullImage = captureFullScreenViaSpectacle()
 
         println("Full screenshot size: ${fullImage.width}x${fullImage.height}")
         println("Cropping to physical bounds: $physicalBounds")
