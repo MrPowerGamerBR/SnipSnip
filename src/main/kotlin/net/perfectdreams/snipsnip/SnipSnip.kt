@@ -157,25 +157,26 @@ class SnipSnip {
      * This captures the entire virtual desktop (all monitors).
      */
     private fun captureFullScreenViaPortal(): File? {
-        val handleToken = "snipsnip${System.currentTimeMillis()}"
-
-        // Start monitoring for the response signal in the background
+        // Start monitoring for the response in the background using busctl with JSON output
         val monitorProcess = ProcessBuilder(
-            "gdbus", "monitor", "--session",
-            "--dest", "org.freedesktop.portal.Desktop"
+            "busctl", "--user", "monitor", "org.freedesktop.portal.Desktop", "--json=short"
         ).start()
 
-        // Make the screenshot request
+        // Give the monitor a moment to start
+        Thread.sleep(100)
+
+        // Make the screenshot request using busctl
         val callProcess = ProcessBuilder(
-            "gdbus", "call", "--session",
-            "--dest", "org.freedesktop.portal.Desktop",
-            "--object-path", "/org/freedesktop/portal/desktop",
-            "--method", "org.freedesktop.portal.Screenshot.Screenshot",
-            "", "{'handle_token': <'$handleToken'>, 'interactive': <false>}"
+            "busctl", "--user", "call",
+            "org.freedesktop.portal.Desktop",
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.Screenshot",
+            "Screenshot",
+            "sa{sv}", "", "1", "interactive", "b", "false"
         ).start()
         callProcess.waitFor()
 
-        // Read monitor output line by line until we find our response
+        // Read monitor output line by line until we find a response with URI
         val reader = monitorProcess.inputStream.bufferedReader()
         var uri: String? = null
         val timeout = System.currentTimeMillis() + 10000 // 10 second timeout
@@ -183,11 +184,11 @@ class SnipSnip {
         while (System.currentTimeMillis() < timeout) {
             if (reader.ready()) {
                 val line = reader.readLine() ?: break
-                // Look for the Response signal with our handle token
-                if (line.contains(handleToken) && line.contains("Response")) {
-                    // Parse the URI from the response
-                    // Format: ...Response (uint32 0, {'uri': <'file:///path/to/file'>})
-                    val uriMatch = Regex("""'uri':\s*<'([^']+)'>""").find(line)
+                // Look for a JSON line containing a uri with file:// path
+                // Format: {...,"payload":{...,"data":[0,{"uri":{"type":"s","data":"file:///path"}}]}}
+                if (line.contains("\"uri\"") && line.contains("file://")) {
+                    // Parse the URI from the JSON
+                    val uriMatch = Regex(""""uri":\{"type":"s","data":"(file://[^"]+)"\}""").find(line)
                     if (uriMatch != null) {
                         uri = uriMatch.groupValues[1]
                         break
@@ -205,6 +206,8 @@ class SnipSnip {
             println("Failed to capture screenshot via portal: no URI received")
             return null
         }
+
+        println("Screenshot URI from portal: $uri")
 
         // Convert file:// URI to File path
         val filePath = uri.removePrefix("file://")
