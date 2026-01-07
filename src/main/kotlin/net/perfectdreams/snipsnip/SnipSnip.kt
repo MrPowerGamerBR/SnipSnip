@@ -378,6 +378,7 @@ class CropOverlayWindow(
     private var currentColor = Color(255, 0, 0) // Default red
     private var brushStrokeWidth = 3f
     private var textFontSize = 18
+    private var currentFontFamily = "SansSerif"
 
     // Drawing operations list
     private val drawingOperations = mutableListOf<DrawingOperation>()
@@ -584,7 +585,8 @@ class CropOverlayWindow(
                 val totalToolsWidth = tools.size * buttonWidth + (tools.size - 1) * spacing
                 val sizeControlWidth = 80  // For size controls
                 val colorButtonWidth = 50
-                val totalWidth = totalToolsWidth + spacing * 2 + sizeControlWidth + spacing + colorButtonWidth
+                val fontButtonWidth = 80  // For font button (only shown for Text tool)
+                val totalWidth = totalToolsWidth + spacing * 2 + sizeControlWidth + spacing + colorButtonWidth + spacing + fontButtonWidth
 
                 val startX = centerX - totalWidth / 2
 
@@ -684,6 +686,26 @@ class CropOverlayWindow(
                 g2d.drawRect(currentX + 5, toolbarY + 5, buttonHeight - 10, buttonHeight - 10)
 
                 toolbarButtonBounds["Color"] = Rectangle(currentX, toolbarY, colorButtonWidth, buttonHeight)
+
+                // Draw font button (only for Text tool)
+                currentX += colorButtonWidth + spacing
+                if (currentTool == ToolMode.TEXT) {
+                    g2d.color = Color(60, 60, 60)
+                    g2d.fillRoundRect(currentX, toolbarY, fontButtonWidth, buttonHeight, 5, 5)
+                    g2d.color = Color(100, 100, 100)
+                    g2d.drawRoundRect(currentX, toolbarY, fontButtonWidth, buttonHeight, 5, 5)
+
+                    // Font name (truncated if too long)
+                    g2d.color = Color.WHITE
+                    g2d.font = Font("SansSerif", Font.PLAIN, 10)
+                    val fontFm = g2d.fontMetrics
+                    val displayName = if (currentFontFamily.length > 10) currentFontFamily.take(9) + "..." else currentFontFamily
+                    val fontTextX = currentX + (fontButtonWidth - fontFm.stringWidth(displayName)) / 2
+                    val fontTextY = toolbarY + (buttonHeight + fontFm.ascent - fontFm.descent) / 2
+                    g2d.drawString(displayName, fontTextX, fontTextY)
+
+                    toolbarButtonBounds["Font"] = Rectangle(currentX, toolbarY, fontButtonWidth, buttonHeight)
+                }
             }
 
             private fun renderDrawingOperation(g2d: Graphics2D, op: DrawingOperation) {
@@ -702,7 +724,7 @@ class CropOverlayWindow(
                     }
                     is TextAnnotation -> {
                         g2d.color = op.color
-                        g2d.font = Font("SansSerif", Font.BOLD, op.fontSize)
+                        g2d.font = Font(op.fontFamily, Font.BOLD, op.fontSize)
                         g2d.drawString(op.text, op.position.x, op.position.y)
                     }
                     is FilledRectangle -> {
@@ -746,7 +768,7 @@ class CropOverlayWindow(
                                 JOptionPane.PLAIN_MESSAGE
                             )
                             if (!text.isNullOrBlank()) {
-                                drawingOperations.add(TextAnnotation(text, e.point, currentColor, textFontSize))
+                                drawingOperations.add(TextAnnotation(text, e.point, currentColor, textFontSize, currentFontFamily))
                             }
                         }
                         ToolMode.RECTANGLE -> {
@@ -1011,6 +1033,21 @@ class CropOverlayWindow(
                     currentColor = newColor
                 }
             }
+            "Font" -> {
+                val fonts = GraphicsEnvironment.getLocalGraphicsEnvironment().availableFontFamilyNames
+                val selectedFont = JOptionPane.showInputDialog(
+                    this,
+                    "Select font:",
+                    "Choose Font",
+                    JOptionPane.PLAIN_MESSAGE,
+                    null,
+                    fonts,
+                    currentFontFamily
+                )
+                if (selectedFont != null) {
+                    currentFontFamily = selectedFont as String
+                }
+            }
         }
         resetToolState()
         panel.repaint()
@@ -1116,7 +1153,7 @@ class CropOverlayWindow(
             is TextAnnotation -> {
                 g2d.color = op.color
                 val scaledFontSize = (op.fontSize * scaleX).toInt()
-                g2d.font = Font("SansSerif", Font.BOLD, scaledFontSize)
+                g2d.font = Font(op.fontFamily, Font.BOLD, scaledFontSize)
                 g2d.drawString(op.text, (op.position.x * scaleX).toInt(), (op.position.y * scaleY).toInt())
             }
             is FilledRectangle -> {
@@ -1156,7 +1193,8 @@ data class TextAnnotation(
     val text: String,
     val position: Point,
     val color: Color,
-    val fontSize: Int
+    val fontSize: Int,
+    val fontFamily: String
 ) : DrawingOperation()
 
 data class FilledRectangle(
