@@ -1,7 +1,6 @@
 package net.perfectdreams.snipsnip
 
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.awt.*
 import java.awt.event.*
@@ -9,9 +8,12 @@ import java.awt.image.BufferedImage
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.util.UUID
+import java.util.*
 import javax.imageio.ImageIO
-import javax.swing.*
+import javax.swing.JFrame
+import javax.swing.JOptionPane
+import javax.swing.JPanel
+import javax.swing.SwingUtilities
 import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 
@@ -74,6 +76,7 @@ class SnipSnip {
         screenshotFile.deleteOnExit()
 
         val captureSuccess = captureCurrentMonitor(screenshotFile, activeOutput)
+
         if (!captureSuccess) {
             JOptionPane.showMessageDialog(null, "Failed to capture screenshot", "Error", JOptionPane.ERROR_MESSAGE)
             exitProcess(1)
@@ -162,9 +165,6 @@ class SnipSnip {
             "busctl", "--user", "monitor", "org.freedesktop.portal.Desktop", "--json=short"
         ).start()
 
-        // Give the monitor a moment to start
-        Thread.sleep(100)
-
         // Make the screenshot request using busctl
         val callProcess = ProcessBuilder(
             "busctl", "--user", "call",
@@ -237,6 +237,10 @@ class SnipSnip {
         }
 
         val fullImage = ImageIO.read(fullScreenshotFile)
+
+        // Delete the created screenshot because it has already been loaded in memory
+        fullScreenshotFile.delete()
+
         if (fullImage == null) {
             println("Failed to read screenshot image")
             return false
