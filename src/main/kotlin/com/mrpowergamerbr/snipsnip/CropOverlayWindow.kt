@@ -65,6 +65,7 @@ class CropOverlayWindow(
     private var brushStrokeWidth = 3f
     private var textFontSize = 18
     private var currentFontFamily = m.config.defaultFontFamily
+    val uiFont = Font.decode(m.config.defaultFontFamily)
 
     // Drawing operations list
     private val drawingOperations = mutableListOf<DrawingOperation>()
@@ -216,6 +217,8 @@ class CropOverlayWindow(
                     g2d.drawRect(panelRect.x.toInt(), panelRect.y.toInt(), panelRect.width.toInt(), panelRect.height.toInt())
 
                     if (m.config.displayProcessInfoWhenHovering) {
+                        g2d.font = uiFont.deriveFont(14f)
+
                         g2d.color = Color(0, 0, 0, 100)
                         g2d.drawString("${hoveredWindow.processName} (${hoveredWindow.pid})", panelRect.x.toInt() + 5, panelRect.y.toInt() + g2d.fontMetrics.height + 1)
 
@@ -241,7 +244,7 @@ class CropOverlayWindow(
 
                     // Draw size indicator
                     val sizeText = "${(selectionRect.width * scaleX).toInt()} x ${(selectionRect.height * scaleY).toInt()}"
-                    g2d.font = Font("SansSerif", Font.BOLD, 14)
+                    g2d.font = uiFont.deriveFont(14f)
                     val metrics = g2d.fontMetrics
                     val textWidth = metrics.stringWidth(sizeText)
                     val textX = selectionRect.x + (selectionRect.width - textWidth) / 2
@@ -285,7 +288,7 @@ class CropOverlayWindow(
                     else ->
                         "ESC to cancel"
                 }
-                g2d.font = Font("SansSerif", Font.PLAIN, 12)
+                g2d.font = uiFont.deriveFont(12f)
                 val instructionMetrics = g2d.fontMetrics
                 val instructionWidth = instructionMetrics.stringWidth(instructions)
 
@@ -446,7 +449,7 @@ class CropOverlayWindow(
 
                     // Button text
                     g2d.color = Color.WHITE
-                    g2d.font = Font("SansSerif", Font.PLAIN, 12)
+                    g2d.font = uiFont.deriveFont(12f)
                     val fm = g2d.fontMetrics
                     val textX = currentX + (buttonWidth - fm.stringWidth(toolName)) / 2
                     val textY = toolbarY + (buttonHeight + fm.ascent - fm.descent) / 2
@@ -476,7 +479,7 @@ class CropOverlayWindow(
                     // Size value
                     val sizeValue = if (currentTool == ToolMode.BRUSH) brushStrokeWidth.toInt().toString() else textFontSize.toString()
                     g2d.color = Color.WHITE
-                    g2d.font = Font("SansSerif", Font.BOLD, 12)
+                    g2d.font = uiFont.deriveFont(12f)
                     val sizeFm = g2d.fontMetrics
                     g2d.drawString(sizeValue, currentX + (28 - sizeFm.stringWidth(sizeValue)) / 2, toolbarY + 19)
 
@@ -521,7 +524,7 @@ class CropOverlayWindow(
 
                     // Font name (truncated if too long)
                     g2d.color = Color.WHITE
-                    g2d.font = Font("SansSerif", Font.PLAIN, 10)
+                    g2d.font = uiFont.deriveFont(10f)
                     val fontFm = g2d.fontMetrics
                     val displayName = if (currentFontFamily.length > 10) currentFontFamily.take(9) + "..." else currentFontFamily
                     val fontTextX = currentX + (fontButtonWidth - fontFm.stringWidth(displayName)) / 2
