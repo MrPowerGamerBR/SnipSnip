@@ -13,6 +13,7 @@ repositories {
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-hocon:1.8.1")
     testImplementation(kotlin("test"))
 }
 
@@ -21,7 +22,7 @@ kotlin {
 }
 
 application {
-    mainClass.set("net.perfectdreams.snipsnip.SnipSnipKt")
+    mainClass.set("com.mrpowergamerbr.snipsnip.SnipSnipKt")
 }
 
 tasks.test {

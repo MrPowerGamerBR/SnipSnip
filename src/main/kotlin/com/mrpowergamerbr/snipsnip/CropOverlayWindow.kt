@@ -1,354 +1,35 @@
-package net.perfectdreams.snipsnip
+package com.mrpowergamerbr.snipsnip
 
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import java.awt.*
-import java.awt.event.*
+import com.mrpowergamerbr.snipsnip.tools.BrushStroke
+import com.mrpowergamerbr.snipsnip.tools.DrawingOperation
+import com.mrpowergamerbr.snipsnip.tools.FilledRectangle
+import com.mrpowergamerbr.snipsnip.tools.TextAnnotation
+import java.awt.BasicStroke
+import java.awt.Color
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.GraphicsEnvironment
+import java.awt.Point
+import java.awt.Rectangle
+import java.awt.RenderingHints
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
+import java.awt.geom.Ellipse2D
+import java.awt.geom.GeneralPath
 import java.awt.image.BufferedImage
-import java.io.File
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
-import java.util.*
-import javax.imageio.ImageIO
 import javax.swing.JColorChooser
 import javax.swing.JFrame
 import javax.swing.JOptionPane
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
-import kotlin.math.roundToInt
-import kotlin.system.exitProcess
-
-// JSON data classes for kscreen-doctor --json output
-@Serializable
-data class KScreenConfig(
-    val outputs: List<KScreenOutput>
-)
-
-@Serializable
-data class KScreenOutput(
-    val name: String,
-    val enabled: Boolean,
-    val pos: KScreenPosition,
-    val size: KScreenSize,
-    val scale: Double
-)
-
-@Serializable
-data class KScreenPosition(
-    val x: Int,
-    val y: Int
-)
-
-@Serializable
-data class KScreenSize(
-    val width: Int,
-    val height: Int
-)
-
-fun main() {
-    SwingUtilities.invokeLater {
-        SnipSnip().start()
-    }
-}
-
-data class MonitorInfo(
-    val geometry: Rectangle,
-    val scale: Double
-)
-
-class SnipSnip {
-    private val screenshotsDir = File(System.getProperty("user.home"), "Imagens/SnipSnip").apply { mkdirs() }
-
-    fun start() {
-        // Get the active monitor name and geometry
-        val activeOutput = getActiveOutputName()
-        val monitorInfo = getMonitorInfo(activeOutput)
-
-        if (monitorInfo == null) {
-            JOptionPane.showMessageDialog(null, "Could not detect monitor geometry", "Error", JOptionPane.ERROR_MESSAGE)
-            exitProcess(1)
-        }
-
-        // Get visible window geometries before taking the screenshot
-        val windowInfos = getVisibleWindowInfos()
-
-        // Take screenshot of the current monitor
-        val screenshotFile = File.createTempFile("snipsnip_", ".png")
-        screenshotFile.deleteOnExit()
-
-        val captureSuccess = captureCurrentMonitor(screenshotFile, activeOutput)
-
-        if (!captureSuccess) {
-            JOptionPane.showMessageDialog(null, "Failed to capture screenshot", "Error", JOptionPane.ERROR_MESSAGE)
-            exitProcess(1)
-        }
-
-        val screenshot = ImageIO.read(screenshotFile)
-        if (screenshot == null) {
-            JOptionPane.showMessageDialog(null, "Failed to load screenshot", "Error", JOptionPane.ERROR_MESSAGE)
-            exitProcess(1)
-        }
-
-        // Show the crop overlay window
-        CropOverlayWindow(
-            screenshot = screenshot,
-            monitorGeometry = monitorInfo.geometry,
-            displayScale = monitorInfo.scale,
-            windowInfos = windowInfos,
-            onCropComplete = { croppedImage, selectedWindow ->
-                saveCroppedImage(croppedImage, selectedWindow)
-                exitProcess(0)
-            },
-            onCancel = {
-                exitProcess(0)
-            }
-        )
-    }
-
-    private fun getActiveOutputName(): String {
-        val process = ProcessBuilder(
-            "qdbus6", "org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName"
-        ).start()
-        return process.inputStream.bufferedReader().readText().trim()
-    }
-
-    private fun getMonitorInfo(outputName: String): MonitorInfo? {
-        val process = ProcessBuilder("kscreen-doctor", "--json").start()
-        val jsonOutput = process.inputStream.bufferedReader().readText()
-
-        val json = Json { ignoreUnknownKeys = true }
-        val config = json.decodeFromString<KScreenConfig>(jsonOutput)
-
-        val output = config.outputs.find { it.name == outputName && it.enabled }
-            ?: return null
-
-        // Calculate scaled dimensions (the actual display size)
-        val scaledWidth = (output.size.width / output.scale).roundToInt()
-        val scaledHeight = (output.size.height / output.scale).roundToInt()
-
-        return MonitorInfo(
-            geometry = Rectangle(output.pos.x, output.pos.y, scaledWidth, scaledHeight),
-            scale = output.scale
-        )
-    }
-
-    /**
-     * Get monitor bounds in physical pixel coordinates for cropping the portal screenshot.
-     * The portal screenshot is in physical pixels, so we need physical coordinates.
-     */
-    private fun getMonitorPhysicalBounds(outputName: String): Rectangle? {
-        val process = ProcessBuilder("kscreen-doctor", "--json").start()
-        val jsonOutput = process.inputStream.bufferedReader().readText()
-
-        val json = Json { ignoreUnknownKeys = true }
-        val config = json.decodeFromString<KScreenConfig>(jsonOutput)
-
-        val output = config.outputs.find { it.name == outputName && it.enabled }
-            ?: return null
-
-        // Position is in logical coordinates, convert to physical by multiplying by scale
-        // Size is already in physical pixels
-        return Rectangle(
-            (output.pos.x * output.scale).roundToInt(),
-            (output.pos.y * output.scale).roundToInt(),
-            output.size.width,
-            output.size.height
-        )
-    }
-
-    /**
-     * Capture a full-screen screenshot using Spectacle.
-     *
-     * This captures the entire virtual desktop (all monitors).
-     */
-    private fun captureFullScreenViaSpectacle(): BufferedImage {
-        // Using the desktop portal would be cool, but there's a smol bug:
-        // When taking the screenshot via the portal in a non-interactive manner, a dummy app with the "KDE" logo shows up for ~5 seconds
-        // So we will use spectacle OKAY SPECTACLE WON BECAUSE OF WOKE......... (just kidding)
-        val spectacleProcess = ProcessBuilder("spectacle", "--fullscreen", "--background", "--nonotify", "--output", "/proc/self/fd/1")
-            .start()
-        val screenshotImageAsBytes = spectacleProcess.inputStream.readAllBytes()
-        val exitValue = spectacleProcess.waitFor()
-
-        if (exitValue != 0)
-            error("Spectacle failed with exit code $exitValue")
-
-        return ImageIO.read(screenshotImageAsBytes.inputStream())
-    }
-
-    private fun captureCurrentMonitor(outputFile: File, activeOutputName: String): Boolean {
-        // Get physical pixel bounds for cropping
-        val physicalBounds = getMonitorPhysicalBounds(activeOutputName)
-        if (physicalBounds == null) {
-            println("Failed to get physical bounds for monitor: $activeOutputName")
-            return false
-        }
-
-        // Capture full screen via portal
-        val fullImage = captureFullScreenViaSpectacle()
-
-        println("Full screenshot size: ${fullImage.width}x${fullImage.height}")
-        println("Cropping to physical bounds: $physicalBounds")
-
-        // Crop to current monitor (physical pixel coordinates)
-        val croppedImage = fullImage.getSubimage(
-            physicalBounds.x,
-            physicalBounds.y,
-            physicalBounds.width,
-            physicalBounds.height
-        )
-
-        ImageIO.write(croppedImage, "PNG", outputFile)
-        return outputFile.exists()
-    }
-
-    /**
-     * Get visible windows in stacking order (topmost first) using KWin scripting API.
-     * This ensures we can properly handle overlapping windows.
-     */
-    private fun getVisibleWindowInfos(): List<WindowInfo> {
-        // Desktop components to filter out
-        val desktopComponents = setOf(
-            "plasmashell",
-            "krunner",
-            "kded5",
-            "kded6",
-            "kwin_wayland",
-            "kwin_x11",
-            "xdg-desktop-portal",
-            "xdg-desktop-portal-kde"
-        )
-
-        val uuid = UUID.randomUUID()
-
-        println("Script UUID is $uuid")
-
-        // TODO: Use createTempFile later, we are using this because it is easier for debugging purposes
-        // We use a randomUUID to avoid hard-to-know debugging sessions of "why tf it isn't working???" because it was loading a previously working result
-        val scriptFile = File("scripts", "script_$uuid.js")
-        scriptFile.writeText(
-            SnipSnip::class.java.getResourceAsStream("/script.js")
-                .readAllBytes()
-                .toString(Charsets.UTF_8)
-                .replace("{randomUUID}", uuid.toString())
-        )
-
-        println("Temporary file is at ${scriptFile.absolutePath}")
-
-        // The output will be the script ID (example: 67)
-        val scriptId = ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", scriptFile.absolutePath)
-            .start()
-            .apply {
-                this.waitFor()
-            }
-            .inputStream
-            .readAllBytes()
-            .toString(Charsets.UTF_8)
-            .trim() // Yeah... you need this
-
-        println("Script ID: $scriptId")
-
-        // And now we run it!
-        // This will output to the journalctl (sadly)
-        val runProcess = ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting/Script$scriptId", "org.kde.kwin.Script.run")
-            .start()
-        val exitValue = runProcess.waitFor()
-
-        println("Status Code: $exitValue")
-        println("Run Script Result: ${runProcess.inputStream.bufferedReader().readText()}")
-
-        // Wait a moment for script to execute
-        Thread.sleep(100)
-
-        // Read output from journalctl
-        val journalProcess = ProcessBuilder("journalctl", "--user", "-t", "kwin_wayland", "-n", "50", "--no-pager", "-o", "cat").start()
-
-        val journalLines = journalProcess.inputStream
-            .bufferedReader()
-            .readLines()
-
-        println("Journal Lines:")
-        for (line in journalLines) {
-            println("- $line")
-        }
-
-        val scriptOutput = journalLines
-            .reversed() // We revert it because we want to get the latest one that matches our magic value
-            .first {
-                it.startsWith("SNIPSNIP_OUTPUT_$uuid:")
-            }
-            .removePrefix("SNIPSNIP_OUTPUT_$uuid:")
-
-        println("Stacking output: $scriptOutput")
-
-        // Contrary to popular belief
-        // (also known as StackOverflow)
-        // the right way to stop the script is with the *gasp* stop argument, which also unloads the script it seems
-        // (You can see all parameters with "qdbus6 org.kde.KWin")
-        ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting/Script$scriptId", "org.kde.kwin.Scripting.stop").start().waitFor()
-
-        // Script output is bottom -> top
-        val stackingInfo = Json.decodeFromString<List<SnipStackingInfo>>(scriptOutput)
-
-        val visibleWindows = stackingInfo
-            .reversed()
-            .filterNot { it.minimized }
-            .filter { it.resourceName !in desktopComponents }
-            .map {
-                WindowInfo(
-                    id = it.internalId,
-                    geometry = DoubleRectangle(it.geometry.x, it.geometry.y, it.geometry.width, it.geometry.height),
-                    it.resourceName,
-                    it.pid
-                )
-            }
-
-        println("Visible Windows (top -> bottom):")
-        for (window in visibleWindows) {
-            println("- $window")
-        }
-
-        return visibleWindows
-    }
-
-    private fun saveCroppedImage(image: BufferedImage, selectedWindow: WindowInfo?) {
-        val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
-
-        val filename = if (selectedWindow?.processName != null) {
-            "${timestamp}_${selectedWindow.processName}.png"
-        } else {
-            "${timestamp}.png"
-        }
-
-        val outputFile = File(screenshotsDir, filename)
-        ImageIO.write(image, "PNG", outputFile)
-
-        println("Screenshot saved to: ${outputFile.absolutePath}")
-
-        // Now we need to copy it to the clipboard using "wl-copy"
-        val process = ProcessBuilder("wl-copy")
-            .start()
-
-        // We write the saved file bytes to the InputStream of wl-copy, which works fine (yayy!)
-        // Maybe we could write everything to a ByteArray first and then write to the file and to here, but for now, it works :)
-        process.outputStream.use {
-            it.write(outputFile.readBytes())
-        }
-
-        process.waitFor()
-    }
-}
-
-data class WindowInfo(
-    val id: String,
-    val geometry: DoubleRectangle,
-    val processName: String?,
-    val pid: Int?
-)
-
-enum class ToolMode { CROP, BRUSH, TEXT, RECTANGLE }
+import kotlin.math.abs
 
 class CropOverlayWindow(
+    private val m: SnipSnipManager,
     private val screenshot: BufferedImage,
     private val monitorGeometry: Rectangle,
     private val displayScale: Double,
@@ -356,15 +37,6 @@ class CropOverlayWindow(
     private val onCropComplete: (BufferedImage, WindowInfo?) -> Unit,
     private val onCancel: () -> Unit
 ) : JFrame() {
-    companion object {
-        private const val USE_KDIALOG_COLOR_PICKER = true
-
-        // Magnifier settings for precision selection
-        private const val MAGNIFIER_SIZE = 120        // Diameter of the magnifying glass circle
-        private const val MAGNIFIER_ZOOM = 4          // 4x zoom
-        private const val MAGNIFIER_OFFSET = 30       // Offset from cursor position
-    }
-
     private var selectionStart: Point? = null
     private var selectionEnd: Point? = null
     private var currentCursorPosition: Point? = null
@@ -386,7 +58,7 @@ class CropOverlayWindow(
     private var currentColor = Color(255, 0, 0) // Default red
     private var brushStrokeWidth = 3f
     private var textFontSize = 18
-    private var currentFontFamily = "Lexica Ultralegible"
+    private var currentFontFamily = m.config.defaultFontFamily
 
     // Drawing operations list
     private val drawingOperations = mutableListOf<DrawingOperation>()
@@ -476,7 +148,7 @@ class CropOverlayWindow(
                 if (currentBrushPoints.size >= 2) {
                     g2d.color = currentColor
                     g2d.stroke = BasicStroke(brushStrokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                    val path = java.awt.geom.GeneralPath()
+                    val path = GeneralPath()
                     path.moveTo(currentBrushPoints[0].x.toFloat(), currentBrushPoints[0].y.toFloat())
                     for (i in 1 until currentBrushPoints.size) {
                         path.lineTo(currentBrushPoints[i].x.toFloat(), currentBrushPoints[i].y.toFloat())
@@ -488,8 +160,8 @@ class CropOverlayWindow(
                 if (rectangleStart != null && rectangleEnd != null && currentTool == ToolMode.RECTANGLE) {
                     val rectX = minOf(rectangleStart!!.x, rectangleEnd!!.x)
                     val rectY = minOf(rectangleStart!!.y, rectangleEnd!!.y)
-                    val rectW = kotlin.math.abs(rectangleEnd!!.x - rectangleStart!!.x)
-                    val rectH = kotlin.math.abs(rectangleEnd!!.y - rectangleStart!!.y)
+                    val rectW = abs(rectangleEnd!!.x - rectangleStart!!.x)
+                    val rectH = abs(rectangleEnd!!.y - rectangleStart!!.y)
                     g2d.color = currentColor
                     g2d.fillRect(rectX, rectY, rectW, rectH)
                 }
@@ -589,29 +261,29 @@ class CropOverlayWindow(
             }
 
             private fun drawMagnifier(g2d: Graphics2D, cursorPos: Point, panelWidth: Int, panelHeight: Int) {
-                val radius = MAGNIFIER_SIZE / 2
+                val radius = m.config.magnifier.size / 2
 
                 // Calculate magnifier position (offset from cursor, flip if near edges)
-                var magX = cursorPos.x + MAGNIFIER_OFFSET
-                var magY = cursorPos.y + MAGNIFIER_OFFSET
+                var magX = cursorPos.x + m.config.magnifier.offset
+                var magY = cursorPos.y + m.config.magnifier.offset
 
                 // Flip to left side if too close to right edge
-                if (magX + MAGNIFIER_SIZE > panelWidth) {
-                    magX = cursorPos.x - MAGNIFIER_OFFSET - MAGNIFIER_SIZE
+                if (magX + m.config.magnifier.size > panelWidth) {
+                    magX = cursorPos.x - m.config.magnifier.offset - m.config.magnifier.size
                 }
                 // Flip to top if too close to bottom edge
-                if (magY + MAGNIFIER_SIZE > panelHeight) {
-                    magY = cursorPos.y - MAGNIFIER_OFFSET - MAGNIFIER_SIZE
+                if (magY + m.config.magnifier.size > panelHeight) {
+                    magY = cursorPos.y - m.config.magnifier.offset - m.config.magnifier.size
                 }
                 // Clamp to screen bounds
-                magX = magX.coerceIn(0, panelWidth - MAGNIFIER_SIZE)
-                magY = magY.coerceIn(0, panelHeight - MAGNIFIER_SIZE)
+                magX = magX.coerceIn(0, panelWidth - m.config.magnifier.size)
+                magY = magY.coerceIn(0, panelHeight - m.config.magnifier.size)
 
                 val centerX = magX + radius
                 val centerY = magY + radius
 
                 // Calculate source region from screenshot (in screenshot coordinates)
-                val sourcePixels = MAGNIFIER_SIZE / MAGNIFIER_ZOOM  // How many source pixels we show
+                val sourcePixels = m.config.magnifier.size / m.config.magnifier.zoom  // How many source pixels we show
                 val srcCenterX = (cursorPos.x * scaleX).toInt()
                 val srcCenterY = (cursorPos.y * scaleY).toInt()
 
@@ -623,7 +295,7 @@ class CropOverlayWindow(
 
                 // Save the current clip and set circular clip for magnifier
                 val oldClip = g2d.clip
-                g2d.clip = java.awt.geom.Ellipse2D.Float(magX.toFloat(), magY.toFloat(), MAGNIFIER_SIZE.toFloat(), MAGNIFIER_SIZE.toFloat())
+                g2d.clip = Ellipse2D.Float(magX.toFloat(), magY.toFloat(), m.config.magnifier.size.toFloat(), m.config.magnifier.size.toFloat())
 
                 // Draw the zoomed portion of the screenshot
                 // Use nearest-neighbor interpolation for crisp pixels
@@ -632,7 +304,7 @@ class CropOverlayWindow(
 
                 g2d.drawImage(
                     screenshot,
-                    magX, magY, magX + MAGNIFIER_SIZE, magY + MAGNIFIER_SIZE,
+                    magX, magY, magX + m.config.magnifier.size, magY + m.config.magnifier.size,
                     srcLeft, srcTop, srcRight, srcBottom,
                     null
                 )
@@ -642,7 +314,7 @@ class CropOverlayWindow(
                 // Draw pixel grid
                 g2d.color = Color(128, 128, 128, 100)
                 g2d.stroke = BasicStroke(1f)
-                val pixelSize = MAGNIFIER_ZOOM  // Each source pixel becomes this many display pixels
+                val pixelSize = m.config.magnifier.zoom  // Each source pixel becomes this many display pixels
 
                 // Calculate grid offset based on where the source pixels start
                 val gridOffsetX = ((srcCenterX - sourcePixels / 2.0) - srcLeft) * pixelSize
@@ -650,15 +322,15 @@ class CropOverlayWindow(
 
                 // Draw vertical grid lines
                 var x = magX + (pixelSize - gridOffsetX % pixelSize).toInt()
-                while (x < magX + MAGNIFIER_SIZE) {
-                    g2d.drawLine(x, magY, x, magY + MAGNIFIER_SIZE)
+                while (x < magX + m.config.magnifier.size) {
+                    g2d.drawLine(x, magY, x, magY + m.config.magnifier.size)
                     x += pixelSize
                 }
 
                 // Draw horizontal grid lines
                 var y = magY + (pixelSize - gridOffsetY % pixelSize).toInt()
-                while (y < magY + MAGNIFIER_SIZE) {
-                    g2d.drawLine(magX, y, magX + MAGNIFIER_SIZE, y)
+                while (y < magY + m.config.magnifier.size) {
+                    g2d.drawLine(magX, y, magX + m.config.magnifier.size, y)
                     y += pixelSize
                 }
 
@@ -675,12 +347,12 @@ class CropOverlayWindow(
                 // Draw magnifier border (circle)
                 g2d.color = Color.WHITE
                 g2d.stroke = BasicStroke(2f)
-                g2d.drawOval(magX, magY, MAGNIFIER_SIZE, MAGNIFIER_SIZE)
+                g2d.drawOval(magX, magY, m.config.magnifier.size, m.config.magnifier.size)
 
                 // Draw darker outer border for contrast
                 g2d.color = Color(0, 0, 0, 150)
                 g2d.stroke = BasicStroke(1f)
-                g2d.drawOval(magX - 1, magY - 1, MAGNIFIER_SIZE + 2, MAGNIFIER_SIZE + 2)
+                g2d.drawOval(magX - 1, magY - 1, m.config.magnifier.size + 2, m.config.magnifier.size + 2)
             }
 
             private fun drawToolbar(g2d: Graphics2D, panelWidth: Int) {
@@ -827,7 +499,7 @@ class CropOverlayWindow(
                         if (op.points.size >= 2) {
                             g2d.color = op.color
                             g2d.stroke = BasicStroke(op.strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                            val path = java.awt.geom.GeneralPath()
+                            val path = GeneralPath()
                             path.moveTo(op.points[0].x.toFloat(), op.points[0].y.toFloat())
                             for (i in 1 until op.points.size) {
                                 path.lineTo(op.points[i].x.toFloat(), op.points[i].y.toFloat())
@@ -942,8 +614,8 @@ class CropOverlayWindow(
                         }
                         ToolMode.TEXT -> {
                             if (selectedTextIndex != null && textDragStartPoint != null) {
-                                val dx = kotlin.math.abs(e.point.x - textDragStartPoint!!.x)
-                                val dy = kotlin.math.abs(e.point.y - textDragStartPoint!!.y)
+                                val dx = abs(e.point.x - textDragStartPoint!!.x)
+                                val dy = abs(e.point.y - textDragStartPoint!!.y)
                                 val dragThreshold = 5
 
                                 if (dx < dragThreshold && dy < dragThreshold) {
@@ -985,8 +657,8 @@ class CropOverlayWindow(
                             if (rectangleStart != null && rectangleEnd != null) {
                                 val rectX = minOf(rectangleStart!!.x, rectangleEnd!!.x).toDouble()
                                 val rectY = minOf(rectangleStart!!.y, rectangleEnd!!.y).toDouble()
-                                val rectW = kotlin.math.abs(rectangleEnd!!.x - rectangleStart!!.x).toDouble()
-                                val rectH = kotlin.math.abs(rectangleEnd!!.y - rectangleStart!!.y).toDouble()
+                                val rectW = abs(rectangleEnd!!.x - rectangleStart!!.x).toDouble()
+                                val rectH = abs(rectangleEnd!!.y - rectangleStart!!.y).toDouble()
                                 if (rectW > 2 && rectH > 2) {
                                     drawingOperations.add(FilledRectangle(DoubleRectangle(rectX, rectY, rectW, rectH), currentColor))
                                 }
@@ -1197,7 +869,7 @@ class CropOverlayWindow(
                 }
             }
             "Color" -> {
-                if (USE_KDIALOG_COLOR_PICKER) {
+                if (m.config.useKDialogForColorPicking) {
                     val process = ProcessBuilder("kdialog", "--getcolor", "--default", ColorUtils.convertFromColorToHex(currentColor.rgb)).start()
                     val exitValue = process.waitFor()
                     if (exitValue == 0) {
@@ -1301,8 +973,8 @@ class CropOverlayWindow(
 
         val x = minOf(start.x, end.x)
         val y = minOf(start.y, end.y)
-        val width = kotlin.math.abs(end.x - start.x)
-        val height = kotlin.math.abs(end.y - start.y)
+        val width = abs(end.x - start.x)
+        val height = abs(end.y - start.y)
 
         return DoubleRectangle(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble())
     }
@@ -1344,7 +1016,7 @@ class CropOverlayWindow(
                 if (op.points.size >= 2) {
                     g2d.color = op.color
                     g2d.stroke = BasicStroke(op.strokeWidth * scaleX.toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                    val path = java.awt.geom.GeneralPath()
+                    val path = GeneralPath()
                     path.moveTo((op.points[0].x * scaleX).toFloat(), (op.points[0].y * scaleY).toFloat())
                     for (i in 1 until op.points.size) {
                         path.lineTo((op.points[i].x * scaleX).toFloat(), (op.points[i].y * scaleY).toFloat())
@@ -1369,37 +1041,6 @@ class CropOverlayWindow(
             }
         }
     }
+
+    enum class ToolMode { CROP, BRUSH, TEXT, RECTANGLE }
 }
-
-data class DoubleRectangle(
-    val x: Double,
-    val y: Double,
-    val width: Double,
-    val height: Double
-) {
-    fun contains(x: Double, y: Double): Boolean {
-        return x in this.x..(this.x + this.width) && y in this.y..(this.y + this.height)
-    }
-}
-
-// Drawing operation classes for annotation tools
-sealed class DrawingOperation
-
-data class BrushStroke(
-    val points: List<Point>,
-    val color: Color,
-    val strokeWidth: Float
-) : DrawingOperation()
-
-data class TextAnnotation(
-    val text: String,
-    val position: Point,
-    val color: Color,
-    val fontSize: Int,
-    val fontFamily: String
-) : DrawingOperation()
-
-data class FilledRectangle(
-    val rect: DoubleRectangle,
-    val color: Color
-) : DrawingOperation()

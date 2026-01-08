@@ -1,4 +1,4 @@
-package net.perfectdreams.snipsnip
+package com.mrpowergamerbr.snipsnip
 
 object ColorUtils {
     fun convertFromColorToHex(input: Int): String {
