@@ -270,7 +270,6 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
         val exitValue = runProcess.waitFor()
 
         println("Status Code: $exitValue")
-        println("Run Script Result: ${runProcess.inputStream.bufferedReader().readText()}")
 
         var scriptOutput: String
 
@@ -296,11 +295,6 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
                 .bufferedReader()
                 .readLines()
 
-            println("Journal Lines:")
-            for (line in journalLines) {
-                println("- $line")
-            }
-
             val journalScriptOutput = journalLines
                 .reversed() // We revert it because we want to get the latest one that matches our magic value
                 .firstOrNull {
@@ -322,7 +316,7 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
         // (also known as StackOverflow)
         // the right way to stop the script is with the *gasp* stop argument, which also unloads the script it seems
         // (You can see all parameters with "qdbus6 org.kde.KWin")
-        ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting/Script$scriptId", "org.kde.kwin.Scripting.stop").start().waitFor()
+        ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting/Script$scriptId", "stop").start().waitFor()
 
         // Script output is bottom -> top
         return Json.decodeFromString<PlasmaWorkspaceInfo>(scriptOutput)

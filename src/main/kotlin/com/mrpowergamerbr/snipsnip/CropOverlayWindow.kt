@@ -15,6 +15,7 @@ import java.awt.GraphicsEnvironment
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.RenderingHints
+import java.awt.Window
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -98,6 +99,7 @@ class CropOverlayWindow(
         title = "SnipSnip - Select Region"
         isUndecorated = true
         defaultCloseOperation = DO_NOTHING_ON_CLOSE
+        type = Window.Type.UTILITY
 
         // Position on the active monitor
         bounds = monitorGeometry
