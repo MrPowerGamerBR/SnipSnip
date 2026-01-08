@@ -135,9 +135,32 @@ class CropOverlayWindow(
                 // Draw the screenshot scaled to fit the window
                 g2d.drawImage(screenshot, 0, 0, width, height, null)
 
-                // Draw semi-transparent overlay
+                // Calculate selection rectangle early so we can exclude it from the overlay
+                val selectionRect = if (selectionStart != null && selectionEnd != null && currentTool == ToolMode.CROP) {
+                    val rect = getSelectionRectangle()
+                    // Convert to integer coordinates ONCE to avoid rounding inconsistencies
+                    val destX = rect.x.toInt()
+                    val destY = rect.y.toInt()
+                    val destX2 = (rect.x + rect.width).toInt()
+                    val destY2 = (rect.y + rect.height).toInt()
+                    Rectangle(destX, destY, destX2 - destX, destY2 - destY)
+                } else null
+
+                // Draw semi-transparent overlay, excluding the selection area to avoid flickering
                 g2d.color = Color(0, 0, 0, 100)
-                g2d.fillRect(0, 0, width, height)
+                if (selectionRect != null && selectionRect.width > 0 && selectionRect.height > 0) {
+                    // Draw overlay in 4 parts around the selection to leave selection area untouched
+                    // Top
+                    g2d.fillRect(0, 0, width, selectionRect.y)
+                    // Bottom
+                    g2d.fillRect(0, selectionRect.y + selectionRect.height, width, height - (selectionRect.y + selectionRect.height))
+                    // Left
+                    g2d.fillRect(0, selectionRect.y, selectionRect.x, selectionRect.height)
+                    // Right
+                    g2d.fillRect(selectionRect.x + selectionRect.width, selectionRect.y, width - (selectionRect.x + selectionRect.width), selectionRect.height)
+                } else {
+                    g2d.fillRect(0, 0, width, height)
+                }
 
                 // Render all completed drawing operations
                 for (op in drawingOperations) {
@@ -186,21 +209,10 @@ class CropOverlayWindow(
                 }
 
                 // Draw selection rectangle if selecting (only in CROP mode)
-                if (selectionStart != null && selectionEnd != null && currentTool == ToolMode.CROP) {
-                    val rect = getSelectionRectangle()
-
-                    // Clear the overlay in the selection area to show original screenshot
-                    g2d.drawImage(
-                        screenshot,
-                        rect.x.toInt(), rect.y.toInt(), (rect.x + rect.width).toInt(), (rect.y + rect.height).toInt(),
-                        (rect.x * scaleX).toInt(), (rect.y * scaleY).toInt(),
-                        ((rect.x + rect.width) * scaleX).toInt(), ((rect.y + rect.height) * scaleY).toInt(),
-                        null
-                    )
-
+                if (selectionRect != null && selectionRect.width > 0 && selectionRect.height > 0) {
                     // Re-render drawing operations within selection area
                     val clipBounds = g2d.clipBounds
-                    g2d.setClip(rect.x.toInt(), rect.y.toInt(), rect.width.toInt(), rect.height.toInt())
+                    g2d.setClip(selectionRect.x, selectionRect.y, selectionRect.width, selectionRect.height)
                     for (op in drawingOperations) {
                         renderDrawingOperation(g2d, op)
                     }
@@ -209,20 +221,20 @@ class CropOverlayWindow(
                     // Draw selection border
                     g2d.color = Color.WHITE
                     g2d.stroke = BasicStroke(2f)
-                    g2d.drawRect(rect.x.toInt(), rect.y.toInt(), rect.width.toInt(), rect.height.toInt())
+                    g2d.drawRect(selectionRect.x, selectionRect.y, selectionRect.width, selectionRect.height)
 
                     // Draw size indicator
-                    val sizeText = "${(rect.width * scaleX).toInt()} x ${(rect.height * scaleY).toInt()}"
+                    val sizeText = "${(selectionRect.width * scaleX).toInt()} x ${(selectionRect.height * scaleY).toInt()}"
                     g2d.font = Font("SansSerif", Font.BOLD, 14)
                     val metrics = g2d.fontMetrics
                     val textWidth = metrics.stringWidth(sizeText)
-                    val textX = rect.x + (rect.width - textWidth) / 2
-                    val textY = rect.y + rect.height + 20
+                    val textX = selectionRect.x + (selectionRect.width - textWidth) / 2
+                    val textY = selectionRect.y + selectionRect.height + 20
 
                     g2d.color = Color(0, 0, 0, 180)
-                    g2d.fillRoundRect((textX - 5).toInt(), (textY - 15).toInt(), textWidth + 10, 20, 5, 5)
+                    g2d.fillRoundRect(textX - 5, textY - 15, textWidth + 10, 20, 5, 5)
                     g2d.color = Color.WHITE
-                    g2d.drawString(sizeText, textX.toInt(), textY.toInt())
+                    g2d.drawString(sizeText, textX, textY)
                 }
 
                 // Draw crosshair at current cursor position (only during keyboard mode)
