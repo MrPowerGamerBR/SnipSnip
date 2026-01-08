@@ -1,4 +1,5 @@
 var clients = workspace.stackingOrder;
+var result = {}
 var windows = []
 for (var i = 0; i < clients.length; i++) {
     var client = clients[i];
@@ -17,5 +18,10 @@ for (var i = 0; i < clients.length; i++) {
         "resourceName": client.resourceName
     })
 }
+result.cursor = {
+    "x": workspace.cursorPos.x,
+    "y": workspace.cursorPos.y
+}
+result.windows = windows
 // The "SNIPSNIP_OUTPUT" is a magic value because we somehow need to figure out the output
-console.log("SNIPSNIP_OUTPUT_{randomUUID}:" + JSON.stringify(windows))
+console.log("SNIPSNIP_OUTPUT_{randomUUID}:" + JSON.stringify(result))

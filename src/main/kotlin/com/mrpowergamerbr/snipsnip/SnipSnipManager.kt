@@ -1,6 +1,7 @@
 package com.mrpowergamerbr.snipsnip
 
 import com.mrpowergamerbr.snipsnip.kscreendoctor.KScreenConfig
+import com.mrpowergamerbr.snipsnip.kscreendoctor.KScreenOutput
 import com.mrpowergamerbr.snipsnip.kscreendoctor.MonitorInfo
 import kotlinx.serialization.json.Json
 import java.awt.Rectangle
@@ -76,8 +77,8 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
 
     private fun takeScreenshot() {
         // Get the active monitor name and geometry
-        val activeOutput = getActiveOutputName()
-        val monitorInfo = getMonitorInfo(activeOutput)
+        val plasmaWorkspaceInfo = getPlasmaWorkspaceInformation()
+        val monitorInfo = getMonitorInfo(plasmaWorkspaceInfo.cursor)
 
         if (monitorInfo == null) {
             JOptionPane.showMessageDialog(
@@ -90,7 +91,7 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
         }
 
         // Get visible window geometries before taking the screenshot
-        val windowInfos = getVisibleWindowInfos()
+        val windowInfos = getVisibleWindowInfos(plasmaWorkspaceInfo)
         val fullMonitorScreenshot = captureFullScreenViaSpectacle()
         val monitorScreenshot = cropImageToCurrentMonitor(fullMonitorScreenshot, monitorInfo)
 
@@ -113,42 +114,48 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
         )
     }
 
-    private fun getActiveOutputName(): String {
-        val process = ProcessBuilder(
-            "qdbus6", "org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName"
-        ).start()
-        return process.inputStream.bufferedReader().readText().trim()
-    }
-
-    private fun getMonitorInfo(outputName: String): MonitorInfo? {
+    private fun getMonitorInfo(cursorPosition: PlasmaWorkspaceInfo.Cursor): MonitorInfo? {
         val process = ProcessBuilder("kscreen-doctor", "--json").start()
         val jsonOutput = process.inputStream.bufferedReader().readText()
 
         val json = Json { ignoreUnknownKeys = true }
         val config = json.decodeFromString<KScreenConfig>(jsonOutput)
 
-        val output = config.outputs.find { it.name == outputName && it.enabled }
-            ?: return null
+        var activeOutput: KScreenOutput? = null
+
+        for (output in config.outputs.filter { it.enabled }) {
+            val x = output.pos.x
+            val y = output.pos.y
+            val width = (output.size.width / output.scale).roundToInt()
+            val height = (output.size.height / output.scale).roundToInt()
+
+            if (cursorPosition.x.toInt() in x..(x + width) && cursorPosition.y.toInt() in y..(y + height)) {
+                activeOutput = output
+                break
+            }
+        }
+
+        if (activeOutput == null) return null
 
         // Calculate scaled dimensions (the actual display size)
-        val scaledWidth = (output.size.width / output.scale).roundToInt()
-        val scaledHeight = (output.size.height / output.scale).roundToInt()
+        val scaledWidth = (activeOutput.size.width / activeOutput.scale).roundToInt()
+        val scaledHeight = (activeOutput.size.height / activeOutput.scale).roundToInt()
 
         println("Scaled Width: $scaledWidth, Scaled Height: $scaledHeight")
         return MonitorInfo(
             geometry = Rectangle(
-                output.pos.x,
-                output.pos.y,
-                (output.size.width / output.scale).roundToInt(),
-                (output.size.height / output.scale).roundToInt()
+                activeOutput.pos.x,
+                activeOutput.pos.y,
+                (activeOutput.size.width / activeOutput.scale).roundToInt(),
+                (activeOutput.size.height / activeOutput.scale).roundToInt()
             ),
             logical = Rectangle(
-                (output.pos.x * output.scale).roundToInt(),
-                (output.pos.y * output.scale).roundToInt(),
-                output.size.width,
-                output.size.height
+                (activeOutput.pos.x * activeOutput.scale).roundToInt(),
+                (activeOutput.pos.y * activeOutput.scale).roundToInt(),
+                activeOutput.size.width,
+                activeOutput.size.height
             ),
-            scale = output.scale
+            scale = activeOutput.scale
         )
     }
 
@@ -190,7 +197,7 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
      * Get visible windows in stacking order (topmost first) using KWin scripting API.
      * This ensures we can properly handle overlapping windows.
      */
-    private fun getVisibleWindowInfos(): List<WindowInfo> {
+    private fun getVisibleWindowInfos(plasmaWorkspaceInfo: PlasmaWorkspaceInfo): List<WindowInfo> {
         // Desktop components to filter out
         val desktopComponents = setOf(
             "plasmashell",
@@ -203,6 +210,29 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
             "xdg-desktop-portal-kde"
         )
 
+        val visibleWindows = plasmaWorkspaceInfo
+            .windows
+            .reversed()
+            .filterNot { it.minimized }
+            .filter { it.resourceName !in desktopComponents }
+            .map {
+                WindowInfo(
+                    id = it.internalId,
+                    geometry = DoubleRectangle(it.geometry.x, it.geometry.y, it.geometry.width, it.geometry.height),
+                    it.resourceName,
+                    it.pid
+                )
+            }
+
+        println("Visible Windows (top -> bottom):")
+        for (window in visibleWindows) {
+            println("- $window")
+        }
+
+        return visibleWindows
+    }
+
+    private fun getPlasmaWorkspaceInformation(): PlasmaWorkspaceInfo {
         val uuid = UUID.randomUUID()
         val magicValue = "SNIPSNIP_OUTPUT_$uuid:"
 
@@ -295,28 +325,9 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
         ProcessBuilder("qdbus6", "org.kde.KWin", "/Scripting/Script$scriptId", "org.kde.kwin.Scripting.stop").start().waitFor()
 
         // Script output is bottom -> top
-        val stackingInfo = Json.decodeFromString<List<SnipStackingInfo>>(scriptOutput)
-
-        val visibleWindows = stackingInfo
-            .reversed()
-            .filterNot { it.minimized }
-            .filter { it.resourceName !in desktopComponents }
-            .map {
-                WindowInfo(
-                    id = it.internalId,
-                    geometry = DoubleRectangle(it.geometry.x, it.geometry.y, it.geometry.width, it.geometry.height),
-                    it.resourceName,
-                    it.pid
-                )
-            }
-
-        println("Visible Windows (top -> bottom):")
-        for (window in visibleWindows) {
-            println("- $window")
-        }
-
-        return visibleWindows
+        return Json.decodeFromString<PlasmaWorkspaceInfo>(scriptOutput)
     }
+
 
     private fun saveCroppedImage(image: BufferedImage, selectedWindow: WindowInfo?) {
         val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
