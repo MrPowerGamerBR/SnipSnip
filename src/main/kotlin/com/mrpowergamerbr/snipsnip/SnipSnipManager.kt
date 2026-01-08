@@ -91,7 +91,6 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
 
         // Get visible window geometries before taking the screenshot
         val windowInfos = getVisibleWindowInfos()
-
         val fullMonitorScreenshot = captureFullScreenViaSpectacle()
         val monitorScreenshot = cropImageToCurrentMonitor(fullMonitorScreenshot, monitorInfo)
 
@@ -205,6 +204,7 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
         )
 
         val uuid = UUID.randomUUID()
+        val magicValue = "SNIPSNIP_OUTPUT_$uuid:"
 
         println("Script UUID is $uuid")
 
@@ -242,27 +242,49 @@ class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
         println("Status Code: $exitValue")
         println("Run Script Result: ${runProcess.inputStream.bufferedReader().readText()}")
 
-        // Wait a moment for script to execute
-        Thread.sleep(100)
+        var scriptOutput: String
 
-        // Read output from journalctl
-        val journalProcess = ProcessBuilder("journalctl", "--user", "-t", "kwin_wayland", "-n", "50", "--no-pager", "-o", "cat").start()
+        var t = 0
+        while (true) {
+            if (t == 100)
+                error("Could not get the KWin script output from the journalctl!")
 
-        val journalLines = journalProcess.inputStream
-            .bufferedReader()
-            .readLines()
+            // Read output from journalctl
+            val journalProcess = ProcessBuilder(
+                "journalctl",
+                "--user",
+                "-t",
+                "kwin_wayland",
+                "-n",
+                "50",
+                "--no-pager",
+                "-o",
+                "cat"
+            ).start()
 
-        println("Journal Lines:")
-        for (line in journalLines) {
-            println("- $line")
-        }
+            val journalLines = journalProcess.inputStream
+                .bufferedReader()
+                .readLines()
 
-        val scriptOutput = journalLines
-            .reversed() // We revert it because we want to get the latest one that matches our magic value
-            .first {
-                it.startsWith("SNIPSNIP_OUTPUT_$uuid:")
+            println("Journal Lines:")
+            for (line in journalLines) {
+                println("- $line")
             }
-            .removePrefix("SNIPSNIP_OUTPUT_$uuid:")
+
+            val journalScriptOutput = journalLines
+                .reversed() // We revert it because we want to get the latest one that matches our magic value
+                .firstOrNull {
+                    it.startsWith(magicValue)
+                }
+
+            if (journalScriptOutput != null) {
+                scriptOutput = journalScriptOutput.removePrefix(magicValue)
+                break
+            }
+
+            Thread.sleep(10)
+            t++
+        }
 
         println("Stacking output: $scriptOutput")
 
