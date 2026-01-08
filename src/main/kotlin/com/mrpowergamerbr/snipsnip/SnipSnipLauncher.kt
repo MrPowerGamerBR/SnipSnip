@@ -12,8 +12,6 @@ object SnipSnipLauncher {
         val configurationFile = File(System.getProperty("conf") ?: "./snipsnip.conf")
         val config = Hocon.decodeFromConfig<SnipSnipConfig>(ConfigFactory.parseFile(configurationFile).resolve())
 
-        SwingUtilities.invokeLater {
-            SnipSnipManager(config).start()
-        }
+        SnipSnipManager(config, args.contains("--daemon")).start()
     }
 }

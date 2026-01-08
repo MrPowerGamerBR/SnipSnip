@@ -5,25 +5,87 @@ import com.mrpowergamerbr.snipsnip.kscreendoctor.MonitorInfo
 import kotlinx.serialization.json.Json
 import java.awt.Rectangle
 import java.awt.image.BufferedImage
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
+import java.io.PrintWriter
+import java.net.StandardProtocolFamily
+import java.net.UnixDomainSocketAddress
+import java.nio.channels.Channels
+import java.nio.channels.ServerSocketChannel
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.*
 import javax.imageio.ImageIO
 import javax.swing.JOptionPane
+import javax.swing.SwingUtilities
 import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 
-class SnipSnipManager(val config: SnipSnipConfig) {
+class SnipSnipManager(val config: SnipSnipConfig, val daemonMode: Boolean) {
     private val screenshotsFolder = File(config.screenshotsFolder)
 
     fun start() {
+        // SnipSnip supports two modes:
+        // 1. Screenshot and quit
+        // 2. Daemon mode with unix sockets (useful for shortcuts!)
+        if (this.daemonMode) {
+            val socketFolder = System.getenv("XDG_RUNTIME_DIR")
+            val socketPath = Path.of("$socketFolder/snipsnip.sock")
+
+            // Clean up any existing socket file
+            Files.deleteIfExists(socketPath)
+
+            val address = UnixDomainSocketAddress.of(socketPath)
+
+            try {
+                ServerSocketChannel.open(StandardProtocolFamily.UNIX)
+                    .use { serverChannel ->
+                        serverChannel.bind(address)
+
+                        while (true) {
+                            serverChannel.accept().use { clientChannel ->
+                                BufferedReader(InputStreamReader(Channels.newInputStream(clientChannel))).use { reader ->
+                                    PrintWriter(
+                                        Channels.newOutputStream(clientChannel), true
+                                    ).use { writer ->
+                                        var line: String?
+                                        while ((reader.readLine().also { line = it }) != null) {
+                                            if (line == "screenshot") {
+                                                SwingUtilities.invokeLater {
+                                                    takeScreenshot()
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+            } finally {
+                Files.deleteIfExists(socketPath)
+            }
+        } else {
+            SwingUtilities.invokeLater {
+                takeScreenshot()
+            }
+        }
+    }
+
+    private fun takeScreenshot() {
         // Get the active monitor name and geometry
         val activeOutput = getActiveOutputName()
         val monitorInfo = getMonitorInfo(activeOutput)
 
         if (monitorInfo == null) {
-            JOptionPane.showMessageDialog(null, "Could not detect monitor geometry", "Error", JOptionPane.ERROR_MESSAGE)
+            JOptionPane.showMessageDialog(
+                null,
+                "Could not detect monitor geometry",
+                "Error",
+                JOptionPane.ERROR_MESSAGE
+            )
             exitProcess(1)
         }
 
@@ -41,10 +103,13 @@ class SnipSnipManager(val config: SnipSnipConfig) {
             windowInfos = windowInfos,
             onCropComplete = { croppedImage, selectedWindow ->
                 saveCroppedImage(croppedImage, selectedWindow)
-                exitProcess(0)
+
+                if (!daemonMode)
+                    exitProcess(0)
             },
             onCancel = {
-                exitProcess(0)
+                if (!daemonMode)
+                    exitProcess(0)
             }
         )
     }
