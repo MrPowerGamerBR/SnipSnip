@@ -2,24 +2,15 @@ package com.mrpowergamerbr.snipsnip
 
 import com.mrpowergamerbr.snipsnip.kscreendoctor.KScreenConfig
 import com.mrpowergamerbr.snipsnip.kscreendoctor.MonitorInfo
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.awt.*
-import java.awt.event.*
-import java.awt.geom.Ellipse2D
-import java.awt.geom.GeneralPath
+import java.awt.Rectangle
 import java.awt.image.BufferedImage
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.*
 import javax.imageio.ImageIO
-import javax.swing.JColorChooser
-import javax.swing.JFrame
 import javax.swing.JOptionPane
-import javax.swing.JPanel
-import javax.swing.SwingUtilities
-import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 

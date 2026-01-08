@@ -121,6 +121,7 @@ class CropOverlayWindow(
                 super.paintComponent(g)
                 val g2d = g as Graphics2D
                 g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                val hoveredWindow = this@CropOverlayWindow.hoveredWindow
 
                 // Calculate scale based on actual panel size vs screenshot size
                 // This accounts for any Swing HiDPI scaling
@@ -169,12 +170,20 @@ class CropOverlayWindow(
                 // Highlight hovered window (only when not selecting and in CROP mode)
                 if (hoveredWindow != null && !isDragging && !isKeyboardSelecting && currentTool == ToolMode.CROP) {
                     // Convert window coordinates to panel coordinates for drawing
-                    val panelRect = windowToPanelRect(hoveredWindow!!.geometry)
+                    val panelRect = windowToPanelRect(hoveredWindow.geometry)
                     g2d.color = Color(100, 150, 255, 80)
                     g2d.fillRect(panelRect.x.toInt(), panelRect.y.toInt(), panelRect.width.toInt(), panelRect.height.toInt())
                     g2d.color = Color(100, 150, 255)
                     g2d.stroke = BasicStroke(2f)
                     g2d.drawRect(panelRect.x.toInt(), panelRect.y.toInt(), panelRect.width.toInt(), panelRect.height.toInt())
+
+                    if (m.config.displayProcessInfoWhenHovering) {
+                        g2d.color = Color(0, 0, 0, 100)
+                        g2d.drawString("${hoveredWindow.processName} (${hoveredWindow.pid})", panelRect.x.toInt() + 5, panelRect.y.toInt() + g2d.fontMetrics.height + 1)
+
+                        g2d.color = Color(255, 255, 255)
+                        g2d.drawString("${hoveredWindow.processName} (${hoveredWindow.pid})", panelRect.x.toInt() + 5, panelRect.y.toInt() + g2d.fontMetrics.height)
+                    }
                 }
 
                 // Draw selection rectangle if selecting (only in CROP mode)

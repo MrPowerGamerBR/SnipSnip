@@ -7,7 +7,8 @@ data class SnipSnipConfig(
     val screenshotsFolder: String,
     val useKDialogForColorPicking: Boolean,
     val defaultFontFamily: String,
-    val magnifier: Magnifier
+    val magnifier: Magnifier,
+    val displayProcessInfoWhenHovering: Boolean
 ) {
     @Serializable
     data class Magnifier(
