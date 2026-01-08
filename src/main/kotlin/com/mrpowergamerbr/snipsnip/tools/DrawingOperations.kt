@@ -3,6 +3,7 @@ package com.mrpowergamerbr.snipsnip.tools
 import com.mrpowergamerbr.snipsnip.DoubleRectangle
 import java.awt.Color
 import java.awt.Point
+import java.awt.image.BufferedImage
 
 // Drawing operation classes for annotation tools
 sealed class DrawingOperation
@@ -24,4 +25,11 @@ data class TextAnnotation(
 data class FilledRectangle(
     val rect: DoubleRectangle,
     val color: Color
+) : DrawingOperation()
+
+data class ImageAnnotation(
+    val image: BufferedImage,
+    val position: Point,
+    val width: Int,
+    val height: Int
 ) : DrawingOperation()

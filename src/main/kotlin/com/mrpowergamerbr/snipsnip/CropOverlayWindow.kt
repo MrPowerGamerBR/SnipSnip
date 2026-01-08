@@ -3,9 +3,11 @@ package com.mrpowergamerbr.snipsnip
 import com.mrpowergamerbr.snipsnip.tools.BrushStroke
 import com.mrpowergamerbr.snipsnip.tools.DrawingOperation
 import com.mrpowergamerbr.snipsnip.tools.FilledRectangle
+import com.mrpowergamerbr.snipsnip.tools.ImageAnnotation
 import com.mrpowergamerbr.snipsnip.tools.TextAnnotation
 import java.awt.BasicStroke
 import java.awt.Color
+import java.awt.Dimension
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
@@ -21,11 +23,15 @@ import java.awt.event.MouseMotionAdapter
 import java.awt.geom.Ellipse2D
 import java.awt.geom.GeneralPath
 import java.awt.image.BufferedImage
+import java.io.File
+import javax.imageio.ImageIO
 import javax.swing.JColorChooser
+import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JOptionPane
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
+import javax.swing.filechooser.FileNameExtensionFilter
 import kotlin.math.abs
 
 class CropOverlayWindow(
@@ -73,6 +79,14 @@ class CropOverlayWindow(
     private var selectedTextIndex: Int? = null
     private var textDragStartPoint: Point? = null
     private var textOriginalPosition: Point? = null
+
+    // Image interaction state (for dragging/resizing)
+    private var selectedImageIndex: Int? = null
+    private var imageDragStartPoint: Point? = null
+    private var imageOriginalPosition: Point? = null
+    private var imageOriginalSize: Dimension? = null
+    private var activeResizeHandle: ResizeHandle? = null
+    private var isResizingImage = false
 
     // Toolbar button bounds (calculated during paint)
     private var toolbarButtonBounds = mutableMapOf<String, Rectangle>()
@@ -264,6 +278,8 @@ class CropOverlayWindow(
                         "Click to add text | ESC to cancel"
                     currentTool == ToolMode.RECTANGLE ->
                         "Click+drag to draw rectangle | ESC to cancel"
+                    currentTool == ToolMode.IMAGE ->
+                        "Click to add image | Drag to move | Drag corners to resize (Shift=lock ratio) | ESC to cancel"
                     else ->
                         "ESC to cancel"
                 }
@@ -386,7 +402,7 @@ class CropOverlayWindow(
                 toolbarButtonBounds.clear()
 
                 // Calculate total toolbar width
-                val tools = listOf("Crop", "Brush", "Text", "Rect")
+                val tools = listOf("Crop", "Brush", "Text", "Rect", "Image")
                 val totalToolsWidth = tools.size * buttonWidth + (tools.size - 1) * spacing
                 val sizeControlWidth = 80  // For size controls
                 val colorButtonWidth = 50
@@ -408,6 +424,7 @@ class CropOverlayWindow(
                         "Brush" -> ToolMode.BRUSH
                         "Text" -> ToolMode.TEXT
                         "Rect" -> ToolMode.RECTANGLE
+                        "Image" -> ToolMode.IMAGE
                         else -> ToolMode.CROP
                     }
                     val isSelected = currentTool == toolMode
@@ -536,6 +553,44 @@ class CropOverlayWindow(
                         g2d.color = op.color
                         g2d.fillRect(op.rect.x.toInt(), op.rect.y.toInt(), op.rect.width.toInt(), op.rect.height.toInt())
                     }
+                    is ImageAnnotation -> {
+                        g2d.drawImage(op.image, op.position.x, op.position.y, op.width, op.height, null)
+
+                        // If this image is selected, draw resize handles
+                        if (currentTool == ToolMode.IMAGE && selectedImageIndex != null) {
+                            val selectedOp = drawingOperations.getOrNull(selectedImageIndex!!)
+                            if (selectedOp === op) {
+                                drawResizeHandles(g2d, op)
+                            }
+                        }
+                    }
+                }
+            }
+
+            private fun drawResizeHandles(g2d: Graphics2D, imageOp: ImageAnnotation) {
+                val handleSize = RESIZE_HANDLE_SIZE
+                val halfHandle = handleSize / 2
+
+                // Corner positions
+                val corners = listOf(
+                    Point(imageOp.position.x - halfHandle, imageOp.position.y - halfHandle),                    // TOP_LEFT
+                    Point(imageOp.position.x + imageOp.width - halfHandle, imageOp.position.y - halfHandle),     // TOP_RIGHT
+                    Point(imageOp.position.x - halfHandle, imageOp.position.y + imageOp.height - halfHandle),    // BOTTOM_LEFT
+                    Point(imageOp.position.x + imageOp.width - halfHandle, imageOp.position.y + imageOp.height - halfHandle)  // BOTTOM_RIGHT
+                )
+
+                // Draw selection border around image
+                g2d.color = Color(100, 150, 255)
+                g2d.stroke = BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, floatArrayOf(5f), 0f)
+                g2d.drawRect(imageOp.position.x, imageOp.position.y, imageOp.width, imageOp.height)
+
+                // Draw handles
+                g2d.stroke = BasicStroke(1f)
+                for (corner in corners) {
+                    g2d.color = Color.WHITE
+                    g2d.fillRect(corner.x, corner.y, handleSize, handleSize)
+                    g2d.color = Color.BLACK
+                    g2d.drawRect(corner.x, corner.y, handleSize, handleSize)
                 }
             }
         }
@@ -593,6 +648,41 @@ class CropOverlayWindow(
                             rectangleStart = e.point
                             rectangleEnd = e.point
                             isDragging = true
+                        }
+                        ToolMode.IMAGE -> {
+                            // First check if clicking on resize handle of selected image
+                            if (selectedImageIndex != null) {
+                                val imageOp = drawingOperations[selectedImageIndex!!] as ImageAnnotation
+                                val handle = findResizeHandleAt(e.point, imageOp)
+                                if (handle != null) {
+                                    activeResizeHandle = handle
+                                    isResizingImage = true
+                                    imageDragStartPoint = e.point
+                                    imageOriginalPosition = imageOp.position
+                                    imageOriginalSize = Dimension(imageOp.width, imageOp.height)
+                                    isDragging = true
+                                    panel.repaint()
+                                    return
+                                }
+                            }
+
+                            // Check if clicking on an image
+                            val clickedImageIndex = findImageAnnotationAt(e.point)
+
+                            if (clickedImageIndex != null) {
+                                // Select and start potential drag
+                                selectedImageIndex = clickedImageIndex
+                                imageDragStartPoint = e.point
+                                val imageOp = drawingOperations[clickedImageIndex] as ImageAnnotation
+                                imageOriginalPosition = imageOp.position
+                                imageOriginalSize = Dimension(imageOp.width, imageOp.height)
+                                isResizingImage = false
+                                isDragging = true
+                            } else {
+                                // Clicking on empty area - open file chooser to add new image
+                                selectedImageIndex = null  // Deselect current image
+                                openImageFilePicker(panel)
+                            }
                         }
                     }
                     panel.repaint()
@@ -687,6 +777,15 @@ class CropOverlayWindow(
                             rectangleEnd = null
                             panel.repaint()
                         }
+                        ToolMode.IMAGE -> {
+                            // Reset drag/resize state but keep selection
+                            isResizingImage = false
+                            activeResizeHandle = null
+                            imageDragStartPoint = null
+                            imageOriginalPosition = null
+                            imageOriginalSize = null
+                            panel.repaint()
+                        }
                     }
                 }
             }
@@ -714,6 +813,37 @@ class CropOverlayWindow(
                         }
                         ToolMode.RECTANGLE -> {
                             rectangleEnd = e.point
+                        }
+                        ToolMode.IMAGE -> {
+                            if (selectedImageIndex != null && imageDragStartPoint != null) {
+                                val imageOp = drawingOperations[selectedImageIndex!!] as ImageAnnotation
+
+                                if (isResizingImage && activeResizeHandle != null && imageOriginalSize != null && imageOriginalPosition != null) {
+                                    // Resize logic
+                                    val dx = e.point.x - imageDragStartPoint!!.x
+                                    val dy = e.point.y - imageDragStartPoint!!.y
+
+                                    val newBounds = calculateResizedBounds(
+                                        imageOriginalPosition!!,
+                                        imageOriginalSize!!,
+                                        activeResizeHandle!!,
+                                        dx, dy,
+                                        e.isShiftDown  // Lock aspect ratio when Shift is held
+                                    )
+
+                                    drawingOperations[selectedImageIndex!!] = imageOp.copy(
+                                        position = newBounds.first,
+                                        width = newBounds.second.width,
+                                        height = newBounds.second.height
+                                    )
+                                } else if (imageOriginalPosition != null) {
+                                    // Move logic (same as text dragging)
+                                    val dx = e.point.x - imageDragStartPoint!!.x
+                                    val dy = e.point.y - imageDragStartPoint!!.y
+                                    val newPosition = Point(imageOriginalPosition!!.x + dx, imageOriginalPosition!!.y + dy)
+                                    drawingOperations[selectedImageIndex!!] = imageOp.copy(position = newPosition)
+                                }
+                            }
                         }
                     }
                     panel.repaint()
@@ -804,6 +934,11 @@ class CropOverlayWindow(
                         resetToolState()
                         panel.repaint()
                     }
+                    KeyEvent.VK_5, KeyEvent.VK_I -> {
+                        currentTool = ToolMode.IMAGE
+                        resetToolState()
+                        panel.repaint()
+                    }
                     // Size adjustment shortcuts
                     KeyEvent.VK_OPEN_BRACKET -> { // [
                         if (currentTool == ToolMode.BRUSH) {
@@ -874,6 +1009,7 @@ class CropOverlayWindow(
             "Brush" -> currentTool = ToolMode.BRUSH
             "Text" -> currentTool = ToolMode.TEXT
             "Rect" -> currentTool = ToolMode.RECTANGLE
+            "Image" -> currentTool = ToolMode.IMAGE
             "SizeDown" -> {
                 if (currentTool == ToolMode.BRUSH) {
                     brushStrokeWidth = (brushStrokeWidth - 1f).coerceIn(1f, 20f)
@@ -929,6 +1065,135 @@ class CropOverlayWindow(
         currentBrushPoints.clear()
         rectangleStart = null
         rectangleEnd = null
+        selectedImageIndex = null
+        imageDragStartPoint = null
+        imageOriginalPosition = null
+        imageOriginalSize = null
+        activeResizeHandle = null
+        isResizingImage = false
+    }
+
+    private fun openImageFilePicker(panel: JPanel) {
+        val imageFile: File? = if (m.config.useKDialogForColorPicking) {
+            // Use kdialog for KDE integration (consistent with color picker)
+            val process = ProcessBuilder(
+                "kdialog", "--getopenfilename",
+                System.getProperty("user.home"),
+                "Image Files (*.png *.jpg *.jpeg *.gif *.bmp)"
+            ).start()
+            val exitValue = process.waitFor()
+            if (exitValue == 0) {
+                val path = process.inputStream.bufferedReader().readLine()?.trim()
+                if (!path.isNullOrBlank()) File(path) else null
+            } else null
+        } else {
+            // Fallback to JFileChooser
+            val chooser = JFileChooser().apply {
+                fileFilter = FileNameExtensionFilter("Image Files", "png", "jpg", "jpeg", "gif", "bmp")
+                dialogTitle = "Select Image"
+            }
+            if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                chooser.selectedFile
+            } else null
+        }
+
+        if (imageFile != null && imageFile.exists()) {
+            try {
+                val image = ImageIO.read(imageFile)
+                if (image != null) {
+                    // Add at a reasonable default position
+                    val position = Point(panel.width / 4, panel.height / 4)
+
+                    // Scale image if too large (fit within half the panel)
+                    val maxW = panel.width / 2
+                    val maxH = panel.height / 2
+                    val (width, height) = calculateFitDimensions(image.width, image.height, maxW, maxH)
+
+                    drawingOperations.add(ImageAnnotation(image, position, width, height))
+                    selectedImageIndex = drawingOperations.size - 1  // Select the new image
+                    panel.repaint()
+                }
+            } catch (e: Exception) {
+                JOptionPane.showMessageDialog(this, "Failed to load image: ${e.message}", "Error", JOptionPane.ERROR_MESSAGE)
+            }
+        }
+    }
+
+    private fun calculateFitDimensions(origW: Int, origH: Int, maxW: Int, maxH: Int): Pair<Int, Int> {
+        if (origW <= maxW && origH <= maxH) {
+            return Pair(origW, origH)
+        }
+        val ratio = minOf(maxW.toDouble() / origW, maxH.toDouble() / origH)
+        return Pair((origW * ratio).toInt(), (origH * ratio).toInt())
+    }
+
+    private fun calculateResizedBounds(
+        originalPos: Point,
+        originalSize: Dimension,
+        handle: ResizeHandle,
+        dx: Int,
+        dy: Int,
+        lockAspectRatio: Boolean
+    ): Pair<Point, Dimension> {
+        var newX = originalPos.x
+        var newY = originalPos.y
+        var newW = originalSize.width
+        var newH = originalSize.height
+
+        val aspectRatio = originalSize.width.toDouble() / originalSize.height
+
+        when (handle) {
+            ResizeHandle.BOTTOM_RIGHT -> {
+                newW = (originalSize.width + dx).coerceAtLeast(20)
+                newH = (originalSize.height + dy).coerceAtLeast(20)
+            }
+            ResizeHandle.BOTTOM_LEFT -> {
+                newX = originalPos.x + dx
+                newW = (originalSize.width - dx).coerceAtLeast(20)
+                newH = (originalSize.height + dy).coerceAtLeast(20)
+            }
+            ResizeHandle.TOP_RIGHT -> {
+                newY = originalPos.y + dy
+                newW = (originalSize.width + dx).coerceAtLeast(20)
+                newH = (originalSize.height - dy).coerceAtLeast(20)
+            }
+            ResizeHandle.TOP_LEFT -> {
+                newX = originalPos.x + dx
+                newY = originalPos.y + dy
+                newW = (originalSize.width - dx).coerceAtLeast(20)
+                newH = (originalSize.height - dy).coerceAtLeast(20)
+            }
+        }
+
+        if (lockAspectRatio) {
+            // Constrain to aspect ratio based on the larger delta
+            val projectedH = (newW / aspectRatio).toInt()
+            val projectedW = (newH * aspectRatio).toInt()
+
+            // Choose dimension that results in smaller size
+            if (projectedH <= newH) {
+                newH = projectedH
+            } else {
+                newW = projectedW
+            }
+
+            // Adjust position for handles that move the origin
+            when (handle) {
+                ResizeHandle.TOP_LEFT -> {
+                    newX = originalPos.x + originalSize.width - newW
+                    newY = originalPos.y + originalSize.height - newH
+                }
+                ResizeHandle.TOP_RIGHT -> {
+                    newY = originalPos.y + originalSize.height - newH
+                }
+                ResizeHandle.BOTTOM_LEFT -> {
+                    newX = originalPos.x + originalSize.width - newW
+                }
+                ResizeHandle.BOTTOM_RIGHT -> { /* No adjustment needed */ }
+            }
+        }
+
+        return Pair(Point(newX, newY), Dimension(newW, newH))
     }
 
     /**
@@ -985,6 +1250,42 @@ class CropOverlayWindow(
             }
         }
         return null
+    }
+
+    private fun findImageAnnotationAt(point: Point): Int? {
+        // Iterate in reverse (topmost/most recent first)
+        for (i in drawingOperations.indices.reversed()) {
+            val op = drawingOperations[i]
+            if (op is ImageAnnotation) {
+                val bounds = Rectangle(op.position.x, op.position.y, op.width, op.height)
+                if (bounds.contains(point)) {
+                    return i
+                }
+            }
+        }
+        return null
+    }
+
+    private fun findResizeHandleAt(point: Point, imageOp: ImageAnnotation): ResizeHandle? {
+        val handleSize = RESIZE_HANDLE_SIZE
+        val halfHandle = handleSize / 2
+
+        val handles = mapOf(
+            ResizeHandle.TOP_LEFT to Rectangle(
+                imageOp.position.x - halfHandle, imageOp.position.y - halfHandle, handleSize, handleSize
+            ),
+            ResizeHandle.TOP_RIGHT to Rectangle(
+                imageOp.position.x + imageOp.width - halfHandle, imageOp.position.y - halfHandle, handleSize, handleSize
+            ),
+            ResizeHandle.BOTTOM_LEFT to Rectangle(
+                imageOp.position.x - halfHandle, imageOp.position.y + imageOp.height - halfHandle, handleSize, handleSize
+            ),
+            ResizeHandle.BOTTOM_RIGHT to Rectangle(
+                imageOp.position.x + imageOp.width - halfHandle, imageOp.position.y + imageOp.height - halfHandle, handleSize, handleSize
+            )
+        )
+
+        return handles.entries.firstOrNull { it.value.contains(point) }?.key
     }
 
     private fun getSelectionRectangle(): DoubleRectangle {
@@ -1059,8 +1360,21 @@ class CropOverlayWindow(
                     (op.rect.height * scaleY).toInt()
                 )
             }
+            is ImageAnnotation -> {
+                val scaledX = (op.position.x * scaleX).toInt()
+                val scaledY = (op.position.y * scaleY).toInt()
+                val scaledW = (op.width * scaleX).toInt()
+                val scaledH = (op.height * scaleY).toInt()
+                g2d.drawImage(op.image, scaledX, scaledY, scaledW, scaledH, null)
+            }
         }
     }
 
-    enum class ToolMode { CROP, BRUSH, TEXT, RECTANGLE }
+    enum class ToolMode { CROP, BRUSH, TEXT, RECTANGLE, IMAGE }
+
+    enum class ResizeHandle { TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
+
+    companion object {
+        private const val RESIZE_HANDLE_SIZE = 10
+    }
 }
