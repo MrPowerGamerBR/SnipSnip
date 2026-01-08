@@ -32,5 +32,6 @@ data class KScreenSize(
 
 data class MonitorInfo(
     val geometry: Rectangle,
+    val logical: Rectangle,
     val scale: Double
 )

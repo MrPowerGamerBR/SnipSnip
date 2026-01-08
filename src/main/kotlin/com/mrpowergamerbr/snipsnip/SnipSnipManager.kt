@@ -30,29 +30,14 @@ class SnipSnipManager(val config: SnipSnipConfig) {
         // Get visible window geometries before taking the screenshot
         val windowInfos = getVisibleWindowInfos()
 
-        // Take screenshot of the current monitor
-        val screenshotFile = File.createTempFile("snipsnip_", ".png")
-        screenshotFile.deleteOnExit()
-
-        val captureSuccess = captureCurrentMonitor(screenshotFile, activeOutput)
-
-        if (!captureSuccess) {
-            JOptionPane.showMessageDialog(null, "Failed to capture screenshot", "Error", JOptionPane.ERROR_MESSAGE)
-            exitProcess(1)
-        }
-
-        val screenshot = ImageIO.read(screenshotFile)
-        if (screenshot == null) {
-            JOptionPane.showMessageDialog(null, "Failed to load screenshot", "Error", JOptionPane.ERROR_MESSAGE)
-            exitProcess(1)
-        }
+        val fullMonitorScreenshot = captureFullScreenViaSpectacle()
+        val monitorScreenshot = cropImageToCurrentMonitor(fullMonitorScreenshot, monitorInfo)
 
         // Show the crop overlay window
         CropOverlayWindow(
             m = this,
-            screenshot = screenshot,
+            screenshot = monitorScreenshot,
             monitorGeometry = monitorInfo.geometry,
-            displayScale = monitorInfo.scale,
             windowInfos = windowInfos,
             onCropComplete = { croppedImage, selectedWindow ->
                 saveCroppedImage(croppedImage, selectedWindow)
@@ -85,33 +70,21 @@ class SnipSnipManager(val config: SnipSnipConfig) {
         val scaledWidth = (output.size.width / output.scale).roundToInt()
         val scaledHeight = (output.size.height / output.scale).roundToInt()
 
+        println("Scaled Width: $scaledWidth, Scaled Height: $scaledHeight")
         return MonitorInfo(
-            geometry = Rectangle(output.pos.x, output.pos.y, scaledWidth, scaledHeight),
+            geometry = Rectangle(
+                output.pos.x,
+                output.pos.y,
+                (output.size.width / output.scale).roundToInt(),
+                (output.size.height / output.scale).roundToInt()
+            ),
+            logical = Rectangle(
+                (output.pos.x * output.scale).roundToInt(),
+                (output.pos.y * output.scale).roundToInt(),
+                output.size.width,
+                output.size.height
+            ),
             scale = output.scale
-        )
-    }
-
-    /**
-     * Get monitor bounds in physical pixel coordinates for cropping the portal screenshot.
-     * The portal screenshot is in physical pixels, so we need physical coordinates.
-     */
-    private fun getMonitorPhysicalBounds(outputName: String): Rectangle? {
-        val process = ProcessBuilder("kscreen-doctor", "--json").start()
-        val jsonOutput = process.inputStream.bufferedReader().readText()
-
-        val json = Json { ignoreUnknownKeys = true }
-        val config = json.decodeFromString<KScreenConfig>(jsonOutput)
-
-        val output = config.outputs.find { it.name == outputName && it.enabled }
-            ?: return null
-
-        // Position is in logical coordinates, convert to physical by multiplying by scale
-        // Size is already in physical pixels
-        return Rectangle(
-            (output.pos.x * output.scale).roundToInt(),
-            (output.pos.y * output.scale).roundToInt(),
-            output.size.width,
-            output.size.height
         )
     }
 
@@ -135,30 +108,18 @@ class SnipSnipManager(val config: SnipSnipConfig) {
         return ImageIO.read(screenshotImageAsBytes.inputStream())
     }
 
-    private fun captureCurrentMonitor(outputFile: File, activeOutputName: String): Boolean {
-        // Get physical pixel bounds for cropping
-        val physicalBounds = getMonitorPhysicalBounds(activeOutputName)
-        if (physicalBounds == null) {
-            println("Failed to get physical bounds for monitor: $activeOutputName")
-            return false
-        }
-
-        // Capture full screen via portal
-        val fullImage = captureFullScreenViaSpectacle()
-
+    private fun cropImageToCurrentMonitor(fullImage: BufferedImage, activeMonitorInfo: MonitorInfo): BufferedImage {
         println("Full screenshot size: ${fullImage.width}x${fullImage.height}")
-        println("Cropping to physical bounds: $physicalBounds")
 
         // Crop to current monitor (physical pixel coordinates)
         val croppedImage = fullImage.getSubimage(
-            physicalBounds.x,
-            physicalBounds.y,
-            physicalBounds.width,
-            physicalBounds.height
+            activeMonitorInfo.logical.x,
+            activeMonitorInfo.logical.y,
+            activeMonitorInfo.logical.width,
+            activeMonitorInfo.logical.height
         )
 
-        ImageIO.write(croppedImage, "PNG", outputFile)
-        return outputFile.exists()
+        return croppedImage
     }
 
     /**

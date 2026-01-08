@@ -32,7 +32,6 @@ class CropOverlayWindow(
     private val m: SnipSnipManager,
     private val screenshot: BufferedImage,
     private val monitorGeometry: Rectangle,
-    private val displayScale: Double,
     windowInfos: List<WindowInfo>,
     private val onCropComplete: (BufferedImage, WindowInfo?) -> Unit,
     private val onCancel: () -> Unit
