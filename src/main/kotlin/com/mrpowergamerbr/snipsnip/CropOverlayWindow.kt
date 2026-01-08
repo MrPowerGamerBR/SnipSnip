@@ -181,7 +181,7 @@ class CropOverlayWindow(
 
                 // Render all completed drawing operations
                 for (op in drawingOperations) {
-                    renderDrawingOperation(g2d, op)
+                    renderDrawingOperation(g2d, op, 1.0, 1.0, true)
                 }
 
                 // Render in-progress brush stroke
@@ -233,7 +233,7 @@ class CropOverlayWindow(
                     val clipBounds = g2d.clipBounds
                     g2d.setClip(selectionRect.x, selectionRect.y, selectionRect.width, selectionRect.height)
                     for (op in drawingOperations) {
-                        renderDrawingOperation(g2d, op)
+                        renderDrawingOperation(g2d, op, 1.0, 1.0, false)
                     }
                     g2d.clip = clipBounds
 
@@ -532,70 +532,6 @@ class CropOverlayWindow(
                     g2d.drawString(displayName, fontTextX, fontTextY)
 
                     toolbarButtonBounds["Font"] = Rectangle(currentX, toolbarY, fontButtonWidth, buttonHeight)
-                }
-            }
-
-            private fun renderDrawingOperation(g2d: Graphics2D, op: DrawingOperation) {
-                when (op) {
-                    is BrushStroke -> {
-                        if (op.points.size >= 2) {
-                            g2d.color = op.color
-                            g2d.stroke = BasicStroke(op.strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                            val path = GeneralPath()
-                            path.moveTo(op.points[0].x.toFloat(), op.points[0].y.toFloat())
-                            for (i in 1 until op.points.size) {
-                                path.lineTo(op.points[i].x.toFloat(), op.points[i].y.toFloat())
-                            }
-                            g2d.draw(path)
-                        }
-                    }
-                    is TextAnnotation -> {
-                        g2d.color = op.color
-                        g2d.font = Font(op.fontFamily, Font.BOLD, op.fontSize)
-                        g2d.drawString(op.text, op.position.x, op.position.y)
-                    }
-                    is FilledRectangle -> {
-                        g2d.color = op.color
-                        g2d.fillRect(op.rect.x.toInt(), op.rect.y.toInt(), op.rect.width.toInt(), op.rect.height.toInt())
-                    }
-                    is ImageAnnotation -> {
-                        g2d.drawImage(op.image, op.position.x, op.position.y, op.width, op.height, null)
-
-                        // If this image is selected, draw resize handles
-                        if (currentTool == ToolMode.IMAGE && selectedImageIndex != null) {
-                            val selectedOp = drawingOperations.getOrNull(selectedImageIndex!!)
-                            if (selectedOp === op) {
-                                drawResizeHandles(g2d, op)
-                            }
-                        }
-                    }
-                }
-            }
-
-            private fun drawResizeHandles(g2d: Graphics2D, imageOp: ImageAnnotation) {
-                val handleSize = RESIZE_HANDLE_SIZE
-                val halfHandle = handleSize / 2
-
-                // Corner positions
-                val corners = listOf(
-                    Point(imageOp.position.x - halfHandle, imageOp.position.y - halfHandle),                    // TOP_LEFT
-                    Point(imageOp.position.x + imageOp.width - halfHandle, imageOp.position.y - halfHandle),     // TOP_RIGHT
-                    Point(imageOp.position.x - halfHandle, imageOp.position.y + imageOp.height - halfHandle),    // BOTTOM_LEFT
-                    Point(imageOp.position.x + imageOp.width - halfHandle, imageOp.position.y + imageOp.height - halfHandle)  // BOTTOM_RIGHT
-                )
-
-                // Draw selection border around image
-                g2d.color = Color(100, 150, 255)
-                g2d.stroke = BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, floatArrayOf(5f), 0f)
-                g2d.drawRect(imageOp.position.x, imageOp.position.y, imageOp.width, imageOp.height)
-
-                // Draw handles
-                g2d.stroke = BasicStroke(1f)
-                for (corner in corners) {
-                    g2d.color = Color.WHITE
-                    g2d.fillRect(corner.x, corner.y, handleSize, handleSize)
-                    g2d.color = Color.BLACK
-                    g2d.drawRect(corner.x, corner.y, handleSize, handleSize)
                 }
             }
         }
@@ -1320,7 +1256,7 @@ class CropOverlayWindow(
 
         // Render all drawing operations, scaled from panel to screenshot coords
         for (op in drawingOperations) {
-            renderDrawingOperationToScreenshot(g2d, op)
+            renderDrawingOperation(g2d, op, scaleX, scaleY, false)
         }
         g2d.dispose()
 
@@ -1336,7 +1272,40 @@ class CropOverlayWindow(
         onCropComplete(copiedImage, selectedWindow)
     }
 
-    private fun renderDrawingOperationToScreenshot(g2d: Graphics2D, op: DrawingOperation) {
+    private fun drawResizeHandles(g2d: Graphics2D, imageOp: ImageAnnotation) {
+        val handleSize = RESIZE_HANDLE_SIZE
+        val halfHandle = handleSize / 2
+
+        // Corner positions
+        val corners = listOf(
+            Point(imageOp.position.x - halfHandle, imageOp.position.y - halfHandle),                    // TOP_LEFT
+            Point(imageOp.position.x + imageOp.width - halfHandle, imageOp.position.y - halfHandle),     // TOP_RIGHT
+            Point(imageOp.position.x - halfHandle, imageOp.position.y + imageOp.height - halfHandle),    // BOTTOM_LEFT
+            Point(imageOp.position.x + imageOp.width - halfHandle, imageOp.position.y + imageOp.height - halfHandle)  // BOTTOM_RIGHT
+        )
+
+        // Draw selection border around image
+        g2d.color = Color(100, 150, 255)
+        g2d.stroke = BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, floatArrayOf(5f), 0f)
+        g2d.drawRect(imageOp.position.x, imageOp.position.y, imageOp.width, imageOp.height)
+
+        // Draw handles
+        g2d.stroke = BasicStroke(1f)
+        for (corner in corners) {
+            g2d.color = Color.WHITE
+            g2d.fillRect(corner.x, corner.y, handleSize, handleSize)
+            g2d.color = Color.BLACK
+            g2d.drawRect(corner.x, corner.y, handleSize, handleSize)
+        }
+    }
+
+    private fun renderDrawingOperation(
+        g2d: Graphics2D,
+        op: DrawingOperation,
+        scaleX: Double,
+        scaleY: Double,
+        drawTools: Boolean
+    ) {
         when (op) {
             is BrushStroke -> {
                 if (op.points.size >= 2) {
@@ -1371,6 +1340,14 @@ class CropOverlayWindow(
                 val scaledW = (op.width * scaleX).toInt()
                 val scaledH = (op.height * scaleY).toInt()
                 g2d.drawImage(op.image, scaledX, scaledY, scaledW, scaledH, null)
+
+                // If this image is selected, draw resize handles
+                if (drawTools && currentTool == ToolMode.IMAGE && selectedImageIndex != null) {
+                    val selectedOp = drawingOperations.getOrNull(selectedImageIndex!!)
+                    if (selectedOp === op) {
+                        drawResizeHandles(g2d, op)
+                    }
+                }
             }
         }
     }
